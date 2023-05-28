@@ -828,8 +828,8 @@ namespace tsl {
 
             /**
              * @brief Draws a rectangle of given sizes with empty filling
-             * 
-             * @param x X pos 
+             *
+             * @param x X pos
              * @param y Y pos
              * @param w Width
              * @param h Height
@@ -847,8 +847,8 @@ namespace tsl {
 
             /**
              * @brief Draws a line
-             * 
-             * @param x0 Start X pos 
+             *
+             * @param x0 Start X pos
              * @param y0 Start Y pos
              * @param x1 End X pos
              * @param y1 End Y pos
@@ -898,8 +898,8 @@ namespace tsl {
 
             /**
              * @brief Draws a dashed line
-             * 
-             * @param x0 Start X pos 
+             *
+             * @param x0 Start X pos
              * @param y0 Start Y pos
              * @param x1 End X pos
              * @param y1 End Y pos
