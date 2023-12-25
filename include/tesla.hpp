@@ -80,10 +80,29 @@ bool IsFrameBackground = true;
 bool FullMode = true;
 uint16_t framebufferWidth = 448;
 uint16_t framebufferHeight = 720;
+bool deactivateOriginalFooter = false;
 #endif
 
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
 PadState pad;
+float M_PI = 3.14159265358979323846;
+
+#include "ini_funcs.hpp"
+
+bool isValidHexColor(const std::string& hexColor) {
+    // Check if the string is a valid hexadecimal color of the format "#RRGGBB"
+    if (hexColor.size() != 6) {
+        return false; // Must be exactly 6 characters long
+    }
+
+    for (char c : hexColor) {
+        if (!isxdigit(c)) {
+            return false; // Must contain only hexadecimal digits (0-9, A-F, a-f)
+        }
+    }
+
+    return true;
+}
 #endif
 
 #ifdef BUILD_ZING
@@ -134,6 +153,31 @@ namespace tsl {
         constexpr inline Color(u16 raw): rgba(raw) {}
         constexpr inline Color(u8 r, u8 g, u8 b, u8 a): r(r), g(g), b(b), a(a) {}
     };
+
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+    Color RGB888(std::string hexColor, std::string defaultHexColor = "#FFFFFF") {
+        // Remove the '#' character if it's present
+        if (!hexColor.empty() && hexColor[0] == '#') {
+            hexColor = hexColor.substr(1);
+        }
+
+        if (isValidHexColor(hexColor)) {
+            std::string r = hexColor.substr(0, 2); // Extract the first two characters (red component)
+            std::string g = hexColor.substr(2, 2); // Extract the next two characters (green component)
+            std::string b = hexColor.substr(4, 2); // Extract the last two characters (blue component)
+
+            // Convert the RGBA8888 strings to RGBA4444
+            uint8_t redValue = std::stoi(r, nullptr, 16) >> 4;   // Right-shift by 4 bits
+            uint8_t greenValue = std::stoi(g, nullptr, 16) >> 4; // Right-shift by 4 bits
+            uint8_t blueValue = std::stoi(b, nullptr, 16) >> 4;  // Right-shift by 4 bits
+
+            // Create a Color with the extracted RGB values
+
+            return Color(redValue, greenValue, blueValue, 15);
+        }
+        return RGB888(defaultHexColor);
+    }
+#endif
 
     namespace style {
         constexpr u32 ListItemDefaultHeight         = 70;       ///< Standard list item height
@@ -223,7 +267,11 @@ namespace tsl {
 
     [[maybe_unused]] static void goBack();
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+    [[maybe_unused]] static void setNextOverlay(std::string ovlPath, std::string args = "");
+#else
     [[maybe_unused]] static void setNextOverlay(const std::string& ovlPath, std::string args = "");
+#endif
 
     template<typename TOverlay, impl::LaunchFlags launchFlags = impl::LaunchFlags::CloseOnExit>
     int loop(int argc, char** argv);
@@ -497,8 +545,16 @@ namespace tsl {
          */
         static u64 comboStringToKeys(const std::string &value) {
             u64 keyCombo = 0x00;
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            size_t max_combo = 4;
+#endif
             for (std::string key : hlp::split(value, '+')) {
                 keyCombo |= hlp::stringToKeyCode(key);
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                if (!--max_combo){
+					return keyCombo;
+#endif
+				}
             }
             return keyCombo;
         }
@@ -1037,6 +1093,22 @@ namespace tsl {
                 std::fill_n(static_cast<Color*>(this->getCurrentFramebuffer()), this->getFramebufferSize() / sizeof(Color), color);
             }
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            inline void setLayerPos(u32 x, u32 y) {
+				float ratio = 1.5;
+				u32 maxX = cfg::ScreenWidth - (int)(ratio * cfg::FramebufferWidth);
+				u32 maxY = cfg::ScreenHeight - (int)(ratio * cfg::FramebufferHeight);
+				if (x > maxX || y > maxY) {
+					return;
+				}
+				setLayerPosImpl(x, y);
+			}
+
+			static Renderer& getRenderer() {
+				return get();
+			}
+#endif
+
             /**
              * @brief Clears the layer (With transparency)
              *
@@ -1562,6 +1634,14 @@ namespace tsl {
                 std::free(glyphBmp);
 
             }
+
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            inline void setLayerPosImpl(u32 x, u32 y) {
+				cfg::LayerPosX = x;
+				cfg::LayerPosY = y;
+				ASSERT_FATAL(viSetLayerPosition(&this->m_layer, cfg::LayerPosX, cfg::LayerPosY));
+			}
+#endif
         };
 
     }
@@ -1586,6 +1666,14 @@ namespace tsl {
             Element() {}
             virtual ~Element() { }
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            std::string highlightColor1Str = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "highlight_color_1");
+            std::string highlightColor2Str = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "highlight_color_2");
+
+            Color highlightColor1 = RGB888(highlightColor1Str, "#2288CC");
+            Color highlightColor2 = RGB888(highlightColor2Str, "#88FFFF");
+#endif
+   
             /**
              * @brief Handles focus requesting
              * @note This function should return the element to focus.
@@ -1759,6 +1847,53 @@ namespace tsl {
              * @param renderer Renderer
              */
             virtual void drawHighlight(gfx::Renderer *renderer) {
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                // Get the current time
+                auto currentTime = std::chrono::system_clock::now();
+                auto timeInSeconds = std::chrono::duration<double>(currentTime.time_since_epoch()).count();
+
+                // Calculate the progress for one full sine wave per second
+                const double cycleDuration = 1.0;  // 1 second for one full sine wave
+                double timeCounter = fmod(timeInSeconds, cycleDuration);
+                float progress = (std::sin(2 * M_PI * timeCounter / cycleDuration) + 1) / 2;
+
+                Color highlightColor = {
+                    static_cast<u8>((highlightColor1.r - highlightColor2.r) * progress + highlightColor2.r),
+                    static_cast<u8>((highlightColor1.g - highlightColor2.g) * progress + highlightColor2.g),
+                    static_cast<u8>((highlightColor1.b - highlightColor2.b) * progress + highlightColor2.b),
+                    0xF
+                };
+                s32 x = 0, y = 0;
+
+                if (this->m_highlightShaking) {
+                    auto t = (std::chrono::system_clock::now() - this->m_highlightShakingStartTime);
+                    if (t >= 100ms)
+                        this->m_highlightShaking = false;
+                    else {
+                        s32 amplitude = std::rand() % 5 + 5;
+
+                        switch (this->m_highlightShakingDirection) {
+                            case FocusDirection::Up:
+                                y -= shakeAnimation(t, amplitude);
+                                break;
+                            case FocusDirection::Down:
+                                y += shakeAnimation(t, amplitude);
+                                break;
+                            case FocusDirection::Left:
+                                x -= shakeAnimation(t, amplitude);
+                                break;
+                            case FocusDirection::Right:
+                                x += shakeAnimation(t, amplitude);
+                                break;
+                            default:
+                                break;
+                        }
+
+                        x = std::clamp(x, -amplitude, amplitude);
+                        y = std::clamp(y, -amplitude, amplitude);
+                    }
+                }
+#else
                 static float counter = 0;
                 const float progress = (std::sin(counter) + 1) / 2;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
@@ -1798,7 +1933,7 @@ namespace tsl {
                         y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
-
+#endif
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y - 4, this->getWidth() + 8, 4, a(highlightColor));
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y + this->getHeight(), this->getWidth() + 8, 4, a(highlightColor));
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y, 4, this->getHeight(), a(highlightColor));
@@ -1972,6 +2107,14 @@ namespace tsl {
          */
         class OverlayFrame : public Element {
         public:
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            std::string defaultTextColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "text_color");
+            Color defaultTextColor = RGB888(defaultTextColorStr);
+            std::string clockColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "clock_color");
+            Color clockColor = RGB888(clockColorStr);
+            std::string batteryColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "battery_color");
+            Color batteryColor = RGB888(batteryColorStr);
+#endif
             /**
              * @brief Constructor
              *
@@ -1993,19 +2136,28 @@ namespace tsl {
 #endif
 
                 if (!this->m_title.empty())
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                    renderer->drawString(this->m_title.c_str(), false, 20, 50, 30, a(defaultTextColor));
+#else
                     renderer->drawString(this->m_title.c_str(), false, 20, 50, 30, a(tsl::style::color::ColorText));
+#endif
                 if (!this->m_subtitle.empty())
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(defaultTextColor));
+#else
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
+#endif
 
 #if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
-                if (FullMode == true)
+                if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(defaultTextColor));
+#else
+                renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #endif
-                    renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
-                if (TeslaFPS == 60)
+                if (!deactivateOriginalFooter) renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(defaultTextColor));
+#else
+                renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
 #endif
-                    renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
-
                 if (this->m_contentElement != nullptr)
                     this->m_contentElement->frame(renderer);
             }
@@ -2018,7 +2170,7 @@ namespace tsl {
                     if ( this->m_title.empty() && this->m_subtitle.empty())
                         this->m_contentElement->setBoundaries(parentX, parentY, parentWidth - 30, parentHeight);
                     else
-                        this->m_contentElement->setBoundaries(parentX + 15, parentY + 100, parentWidth - 85, parentHeight - 73);
+                        this->m_contentElement->setBoundaries(parentX + 35, parentY + 140, parentWidth - 85, parentHeight - 73 - 105); // CUSTOM MODIFICATION
 #else
                     this->m_contentElement->setBoundaries(parentX + 35, parentY + 125, parentWidth - 85, parentHeight - 73 - 125);
 #endif
@@ -2222,6 +2374,7 @@ namespace tsl {
              *
              */
             List() : Element() {}
+
             virtual ~List() {
                 for (auto& item : this->m_items)
                     delete item;
@@ -2538,6 +2691,10 @@ namespace tsl {
          */
         class ListItem : public Element {
         public:
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            std::string defaultTextColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "text_color");
+            Color defaultTextColor = RGB888(defaultTextColorStr);
+#endif
             /**
              * @brief Constructor
              *
@@ -2575,8 +2732,13 @@ namespace tsl {
                     }
                 }
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                renderer->drawRect(this->getX(), this->getY(), this->getWidth(), 1, a({ 0x4, 0x4, 0x4, 0xF  }));
+				renderer->drawRect(this->getX(), this->getTopBound(), this->getWidth(), 1, a({ 0x0, 0x0, 0x0, 0xD }));
+#else
                 renderer->drawRect(this->getX(), this->getY(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
                 renderer->drawRect(this->getX(), this->getTopBound(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
+#endif
 
                 if (this->m_trunctuated) {
                     if (this->m_focused) {
@@ -2597,7 +2759,11 @@ namespace tsl {
                         renderer->drawString(this->m_ellipsisText.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(tsl::style::color::ColorText));
                     }
                 } else {
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                    renderer->drawString(this->m_text.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(defaultTextColor));
+#else
                     renderer->drawString(this->m_text.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(tsl::style::color::ColorText));
+#endif
                 }
 
                 renderer->drawString(this->m_value.c_str(), false, this->getX() + this->m_maxWidth + 45, this->getY() + 45, 20, this->m_faint ? a(tsl::style::color::ColorDescription) : a(tsl::style::color::ColorHighlight));
@@ -3929,6 +4095,14 @@ namespace tsl {
         Overlay::get()->goBack();
     }
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+    static void setNextOverlay(std::string ovlPath, std::string args) {
+
+		args += " --skipCombo";
+
+		envSetNextLoad(ovlPath.c_str(), args.c_str());
+	}
+#else
     static void setNextOverlay(const std::string& ovlPath, std::string origArgs) {
 
         std::string args = std::filesystem::path(ovlPath).filename();
@@ -3936,6 +4110,7 @@ namespace tsl {
 
         envSetNextLoad(ovlPath.c_str(), args.c_str());
     }
+#endif
 
     /**
      * @brief libtesla's main function
@@ -4042,6 +4217,10 @@ namespace tsl::cfg {
     u16 FramebufferHeight = 0;
     u64 launchCombo = HidNpadButton_L | HidNpadButton_Down | HidNpadButton_StickR;
 }
+
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+extern "C" void __libnx_init_time(void);
+#endif
 
 extern "C" {
 
