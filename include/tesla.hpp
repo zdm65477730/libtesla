@@ -551,10 +551,10 @@ namespace tsl {
             for (std::string key : hlp::split(value, '+')) {
                 keyCombo |= hlp::stringToKeyCode(key);
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (!--max_combo){
+                if (!--max_combo) {
 					return keyCombo;
-#endif
 				}
+#endif
             }
             return keyCombo;
         }
@@ -2148,13 +2148,17 @@ namespace tsl {
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
 #endif
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
                 if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(defaultTextColor));
+#elif defined(BUILD_ZING)
+                if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #else
                 renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #endif
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
                 if (!deactivateOriginalFooter) renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(defaultTextColor));
+#elif defined(BUILD_ZING)
+                if (!deactivateOriginalFooter) renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
 #else
                 renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
 #endif
