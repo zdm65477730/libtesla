@@ -4229,7 +4229,9 @@ extern "C" void __libnx_init_time(void);
 extern "C" {
 
     u32 __nx_applet_type = AppletType_None;
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
     u32 __nx_fs_num_sessions = 1;
+#endif
     u32  __nx_nv_transfermem_size = 0x40000;
     ViLayerFlags __nx_vi_stray_layer_flags = (ViLayerFlags)0;
 
