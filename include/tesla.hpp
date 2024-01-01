@@ -81,13 +81,13 @@ bool FullMode = true;
 uint16_t framebufferWidth = 448;
 uint16_t framebufferHeight = 720;
 bool deactivateOriginalFooter = false;
+
+PadState pad;
 #endif
 
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
-PadState pad;
-float M_PI = 3.14159265358979323846;
-
 #include "ini_funcs.hpp"
+float M_PI = 3.14159265358979323846;
 
 bool isValidHexColor(const std::string& hexColor) {
     // Check if the string is a valid hexadecimal color of the format "#RRGGBB"
@@ -2174,7 +2174,7 @@ namespace tsl {
                     if ( this->m_title.empty() && this->m_subtitle.empty())
                         this->m_contentElement->setBoundaries(parentX, parentY, parentWidth - 30, parentHeight);
                     else
-                        this->m_contentElement->setBoundaries(parentX + 35, parentY + 140, parentWidth - 85, parentHeight - 73 - 105); // CUSTOM MODIFICATION
+                        this->m_contentElement->setBoundaries(parentX + 15, parentY + 100, parentWidth - 70, parentHeight - 73); // CUSTOM MODIFICATION
 #else
                     this->m_contentElement->setBoundaries(parentX + 35, parentY + 125, parentWidth - 85, parentHeight - 73 - 125);
 #endif
@@ -4002,7 +4002,7 @@ namespace tsl {
             padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadSystemExt);
 
             // Initialize pad
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY)
+#if !defined(BUILD_STATUS_MONITOR_OVERLAY) && !defined(BUILD_ZING)
             PadState pad;
 #endif
             padInitializeAny(&pad);
