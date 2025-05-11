@@ -89,6 +89,16 @@ PadState pad;
 #include "ini_funcs.hpp"
 float M_PI = 3.14159265358979323846;
 
+bool fontCache = true;
+
+#include <cstdlib>
+
+extern "C" {
+	void __assert_func(const char *_file, int _line, const char *_func, const char *_expr ) {
+		abort();
+	}
+}
+
 bool isValidHexColor(const std::string& hexColor) {
     // Check if the string is a valid hexadecimal color of the format "#RRGGBB"
     if (hexColor.size() != 6) {
@@ -114,6 +124,38 @@ Breeze_state Bstate = {};
 
 using namespace std::literals::string_literals;
 using namespace std::literals::chrono_literals;
+
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+struct GlyphInfo {
+	u8* pointer;
+	int width;
+	int height;
+};
+
+struct KeyPairHash {
+	std::size_t operator()(const std::pair<int, float>& key) const {
+		// Combine hashes of both components
+		union returnValue {
+			char c[8];
+			std::size_t s;
+		} value;
+		memcpy(&value.c[0], &key.first, 4);
+		memcpy(&value.c[4], &key.second, 4);
+		return value.s;
+	}
+};
+
+// Custom equality comparison for int-float pairs
+struct KeyPairEqual {
+	bool operator()(const std::pair<int, float>& lhs, const std::pair<int, float>& rhs) const {
+		const float epsilon = 0.00001f;
+		return lhs.first == rhs.first && 
+			std::abs(lhs.second - rhs.second) < epsilon;
+	}
+};
+
+std::unordered_map<std::pair<s32, float>, GlyphInfo, KeyPairHash, KeyPairEqual> cache;
+#endif
 
 namespace tsl {
 
@@ -1487,6 +1529,14 @@ namespace tsl {
                 viCloseDisplay(&this->m_display);
                 eventClose(&this->m_vsyncEvent);
                 viExit();
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                if (cache.size()) {
+					for (const auto& [key, value] : cache) {
+						std::free(value.pointer);
+					}
+					cache.clear();
+				}
+#endif
             }
 
             /**
@@ -1618,7 +1668,28 @@ namespace tsl {
             inline void drawGlyph(s32 codepoint, s32 x, s32 y, Color color, stbtt_fontinfo *font, float fontSize) {
                 int width = 10, height = 10;
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                u8* glyphBmp = nullptr;
+
+				if (fontCache) {
+					auto pair = std::make_pair(codepoint, fontSize);
+					auto found = cache.find(pair);
+					if (found != cache.end()) {
+						glyphBmp = found -> second.pointer;
+						width = found -> second.width;
+						height = found -> second.height;
+					}
+					else {
+						glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
+						if (glyphBmp) cache[pair] = GlyphInfo{glyphBmp, width, height};
+					}
+				}
+				else {
+					glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
+				}
+#else
                 u8 *glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
+#endif
 
                 if (glyphBmp == nullptr)
                     return;
@@ -1631,8 +1702,10 @@ namespace tsl {
                     }
                 }
 
-                std::free(glyphBmp);
-
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+                if (!fontCache)
+#endif
+                    std::free(glyphBmp);
             }
 
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
@@ -3883,6 +3956,15 @@ namespace tsl {
 
             this->m_guiStack.push(std::move(gui));
 
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            if (cache.size()) {
+				for (const auto& [key, value] : cache) {
+					std::free(value.pointer);
+				}
+				cache.clear();
+			}
+#endif
+
             return this->m_guiStack.top();
         }
 
@@ -3904,6 +3986,15 @@ namespace tsl {
          * @note The Overlay gets closes once there are no more Guis on the stack
          */
         void goBack() {
+#if defined(BUILD_STATUS_MONITOR_OVERLAY)
+            if (cache.size()) {
+				for (const auto& [key, value] : cache) {
+					std::free(value.pointer);
+				}
+				cache.clear();
+			}
+#endif
+
             if (!this->m_closeOnExit && this->m_guiStack.size() == 1) {
                 this->hide();
                 return;
