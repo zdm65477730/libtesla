@@ -1443,22 +1443,40 @@ namespace tsl {
              * @param y Y Pos
              * @return Offset
              */
-            u32 getPixelOffset(s32 x, s32 y) {
+            inline u32 getPixelOffset(s32 x, s32 y) {
                 if (!this->m_scissoringStack.empty()) {
-                    auto currScissorConfig = this->m_scissoringStack.top();
-                    if (x < currScissorConfig.x ||
-                        y < currScissorConfig.y ||
-                        x > currScissorConfig.x + currScissorConfig.w ||
-                        y > currScissorConfig.y + currScissorConfig.h)
-                            return UINT32_MAX;
+                    // Optimization 1: The clipping check uses unsigned difference comparison (reducing 4 comparisons to 2).
+                    const auto& curr = this->m_scissoringStack.top();
+                    u32 dx = static_cast<u32>(x - curr.x);
+                    u32 dy = static_cast<u32>(y - curr.y);
+                    if (dx > static_cast<u32>(curr.w) || 
+                        dy > static_cast<u32>(curr.h)) {
+                        return UINT32_MAX;
+                    }
                 }
 
-                u32 tmpPos = ((y & 127) / 16) + (x / 32 * 8) + ((y / 16 / 8) * (((cfg::FramebufferWidth / 2) / 16 * 8)));
-                tmpPos *= 16 * 16 * 4;
+                // Optimization 2: Fully implemented with bitwise operations (eliminates all division/modulo operations)
+                //u32 tmpPos = ((y & 127) / 16) + (x / 32 * 8) + ((y / 16 / 8) * (((cfg::FramebufferWidth / 2) / 16 * 8)));
 
-                tmpPos += ((y % 16) / 8) * 512 + ((x % 32) / 16) * 256 + ((y % 8) / 2) * 64 + ((x % 16) / 8) * 32 + (y % 2) * 16 + (x % 8) * 2;
+                // Constant precomputation (optimized by the compiler)
+                constexpr u32 y_mask = 0x7F;  // 127
+                constexpr u16 fb = cfg::FramebufferWidth >> 2; //(cfg::FramebufferWidth / 2) / 16 * 8
+                // High-order bit calculation (equivalent to the original tmpPos*512)
+                u32 highPart = ((y & y_mask) >> 4) + ((x >> 2) & 0xFFFFFFF8) + ((y >> 7) * fb); // ((y / 16 / 8)
 
-                return tmpPos / 2;
+                //tmpPos *= 16 * 16 * 4;
+                highPart <<= 9;  // tmpPos *= 16 * 16 * 4;
+
+                // Low-order bit calculation (equivalent to the original B/2)
+                //tmpPos += ((y % 16) / 8) * 512 + ((x % 32) / 16) * 256 + ((y % 8) / 2) * 64 + ((x % 16) / 8) * 32 + (y % 2) * 16 + (x % 8) * 2;
+                u32 lowPart = (((y >> 3) & 0x1) << 8)   // ((y%16)/8)*256
+                            | (((x >> 4) & 0x1) << 7)   // ((x%32)/16)*128
+                            | (((y >> 1) & 0x3) << 5)   // ((y%8)/2)*32
+                            | (((x >> 3) & 0x1) << 4)   // ((x%16)/8)*16
+                            | (((y     ) & 0x1) << 3)   // (y%2)*8
+                            | (x & 0x7);
+                //return tmpPos / 2;
+                return highPart | lowPart;
             }
 
             /**
