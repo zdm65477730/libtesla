@@ -1460,9 +1460,8 @@ namespace tsl {
 
                 // Constant precomputation (optimized by the compiler)
                 constexpr u32 y_mask = 0x7F;  // 127
-                constexpr u16 fb = cfg::FramebufferWidth >> 2; //(cfg::FramebufferWidth / 2) / 16 * 8
                 // High-order bit calculation (equivalent to the original tmpPos*512)
-                u32 highPart = ((y & y_mask) >> 4) + ((x >> 2) & 0xFFFFFFF8) + ((y >> 7) * fb); // ((y / 16 / 8)
+                u32 highPart = ((y & y_mask) >> 4) + ((x >> 2) & 0xFFFFFFF8) + ((y >> 7) * ((cfg::FramebufferWidth / 2) / 16 * 8)); // ((y / 16 / 8)
 
                 //tmpPos *= 16 * 16 * 4;
                 highPart <<= 9;  // tmpPos *= 16 * 16 * 4;
