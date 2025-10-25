@@ -235,6 +235,7 @@ namespace tsl {
             constexpr Color ColorHandle           = { 0x5, 0x5, 0x5, 0xF };   ///< Track bar handle color
             constexpr Color ColorText             = { 0xF, 0xF, 0xF, 0xF };   ///< Standard text color
             constexpr Color ColorDescription      = { 0xA, 0xA, 0xA, 0xF };   ///< Description text color
+            constexpr Color ColorDescription_br   = { 0xC, 0xC, 0xC, 0xF };   ///< Brighter than ColorDescription, darker than ColorText
             constexpr Color ColorHeaderBar        = { 0xC, 0xC, 0xC, 0xF };   ///< Category header rectangle color
             constexpr Color ColorClickAnimation   = { 0x0, 0x2, 0x2, 0xF };   ///< Element click animation color
         }
@@ -2235,7 +2236,7 @@ namespace tsl {
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(defaultTextColor));
 #else
-                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
+                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription_br));
 #endif
 
 #if defined(BUILD_STATUS_MONITOR_OVERLAY)
