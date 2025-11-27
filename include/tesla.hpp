@@ -74,7 +74,7 @@
         }                               \
     })
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
+#if defined(BUILD_ZING)
 u8 TeslaFPS = 60;
 bool IsFrameBackground = true;
 bool FullMode = true;
@@ -83,36 +83,6 @@ uint16_t framebufferHeight = 720;
 bool deactivateOriginalFooter = false;
 
 PadState pad;
-#endif
-
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-#include "ini_funcs.hpp"
-float M_PI = 3.14159265358979323846;
-
-bool fontCache = true;
-
-#include <cstdlib>
-
-extern "C" {
-	void __assert_func(const char *_file, int _line, const char *_func, const char *_expr ) {
-		abort();
-	}
-}
-
-bool isValidHexColor(const std::string& hexColor) {
-    // Check if the string is a valid hexadecimal color of the format "#RRGGBB"
-    if (hexColor.size() != 6) {
-        return false; // Must be exactly 6 characters long
-    }
-
-    for (char c : hexColor) {
-        if (!isxdigit(c)) {
-            return false; // Must contain only hexadecimal digits (0-9, A-F, a-f)
-        }
-    }
-
-    return true;
-}
 #endif
 
 #ifdef BUILD_ZING
@@ -125,38 +95,6 @@ Breeze_state Bstate = {};
 using namespace std::literals::string_literals;
 using namespace std::literals::chrono_literals;
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-struct GlyphInfo {
-	u8* pointer;
-	int width;
-	int height;
-};
-
-struct KeyPairHash {
-	std::size_t operator()(const std::pair<int, float>& key) const {
-		// Combine hashes of both components
-		union returnValue {
-			char c[8];
-			std::size_t s;
-		} value;
-		memcpy(&value.c[0], &key.first, 4);
-		memcpy(&value.c[4], &key.second, 4);
-		return value.s;
-	}
-};
-
-// Custom equality comparison for int-float pairs
-struct KeyPairEqual {
-	bool operator()(const std::pair<int, float>& lhs, const std::pair<int, float>& rhs) const {
-		const float epsilon = 0.00001f;
-		return lhs.first == rhs.first && 
-			std::abs(lhs.second - rhs.second) < epsilon;
-	}
-};
-
-std::unordered_map<std::pair<s32, float>, GlyphInfo, KeyPairHash, KeyPairEqual> cache;
-#endif
-
 namespace tsl {
 
     // Constants
@@ -165,7 +103,7 @@ namespace tsl {
 
         constexpr u32 ScreenWidth = 1920;       ///< Width of the Screen
         constexpr u32 ScreenHeight = 1080;      ///< Height of the Screen
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
+#if defined(BUILD_ZING)
         constexpr u32 LayerMaxWidth = 1280;
         constexpr u32 LayerMaxHeight = 720;
 #endif
@@ -195,31 +133,6 @@ namespace tsl {
         constexpr inline Color(u16 raw): rgba(raw) {}
         constexpr inline Color(u8 r, u8 g, u8 b, u8 a): r(r), g(g), b(b), a(a) {}
     };
-
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-    Color RGB888(std::string hexColor, std::string defaultHexColor = "#FFFFFF") {
-        // Remove the '#' character if it's present
-        if (!hexColor.empty() && hexColor[0] == '#') {
-            hexColor = hexColor.substr(1);
-        }
-
-        if (isValidHexColor(hexColor)) {
-            std::string r = hexColor.substr(0, 2); // Extract the first two characters (red component)
-            std::string g = hexColor.substr(2, 2); // Extract the next two characters (green component)
-            std::string b = hexColor.substr(4, 2); // Extract the last two characters (blue component)
-
-            // Convert the RGBA8888 strings to RGBA4444
-            uint8_t redValue = std::stoi(r, nullptr, 16) >> 4;   // Right-shift by 4 bits
-            uint8_t greenValue = std::stoi(g, nullptr, 16) >> 4; // Right-shift by 4 bits
-            uint8_t blueValue = std::stoi(b, nullptr, 16) >> 4;  // Right-shift by 4 bits
-
-            // Create a Color with the extracted RGB values
-
-            return Color(redValue, greenValue, blueValue, 15);
-        }
-        return RGB888(defaultHexColor);
-    }
-#endif
 
     namespace style {
         constexpr u32 ListItemDefaultHeight         = 70;       ///< Standard list item height
@@ -309,11 +222,7 @@ namespace tsl {
 
     [[maybe_unused]] static void goBack();
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-    [[maybe_unused]] static void setNextOverlay(std::string ovlPath, std::string args = "");
-#else
     [[maybe_unused]] static void setNextOverlay(const std::string& ovlPath, std::string args = "");
-#endif
 
     template<typename TOverlay, impl::LaunchFlags launchFlags = impl::LaunchFlags::CloseOnExit>
     int loop(int argc, char** argv);
@@ -587,16 +496,8 @@ namespace tsl {
          */
         static u64 comboStringToKeys(const std::string &value) {
             u64 keyCombo = 0x00;
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            size_t max_combo = 4;
-#endif
             for (std::string key : hlp::split(value, '+')) {
                 keyCombo |= hlp::stringToKeyCode(key);
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (!--max_combo) {
-					return keyCombo;
-				}
-#endif
             }
             return keyCombo;
         }
@@ -1135,22 +1036,6 @@ namespace tsl {
                 std::fill_n(static_cast<Color*>(this->getCurrentFramebuffer()), this->getFramebufferSize() / sizeof(Color), color);
             }
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            inline void setLayerPos(u32 x, u32 y) {
-				float ratio = 1.5;
-				u32 maxX = cfg::ScreenWidth - (int)(ratio * cfg::FramebufferWidth);
-				u32 maxY = cfg::ScreenHeight - (int)(ratio * cfg::FramebufferHeight);
-				if (x > maxX || y > maxY) {
-					return;
-				}
-				setLayerPosImpl(x, y);
-			}
-
-			static Renderer& getRenderer() {
-				return get();
-			}
-#endif
-
             /**
              * @brief Clears the layer (With transparency)
              *
@@ -1486,7 +1371,7 @@ namespace tsl {
 
                 cfg::LayerPosX = 0;
                 cfg::LayerPosY = 0;
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY) && !defined(BUILD_ZING)
+#if !defined(BUILD_ZING)
                 cfg::FramebufferWidth  = 448;
                 cfg::FramebufferHeight = 720;
                 cfg::LayerWidth  = cfg::ScreenHeight * (float(cfg::FramebufferWidth) / float(cfg::FramebufferHeight));
@@ -1546,14 +1431,6 @@ namespace tsl {
                 viCloseDisplay(&this->m_display);
                 eventClose(&this->m_vsyncEvent);
                 viExit();
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (cache.size()) {
-					for (const auto& [key, value] : cache) {
-						std::free(value.pointer);
-					}
-					cache.clear();
-				}
-#endif
             }
 
             /**
@@ -1663,9 +1540,6 @@ namespace tsl {
              * @warning Don't call this before calling \ref startFrame once
              */
             inline void endFrame() {
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
-                svcSleepThread(1000*1000*1000 / TeslaFPS);
-#endif
                 this->waitForVSync();
                 framebufferEnd(&this->m_framebuffer);
 
@@ -1685,28 +1559,7 @@ namespace tsl {
             inline void drawGlyph(s32 codepoint, s32 x, s32 y, Color color, stbtt_fontinfo *font, float fontSize) {
                 int width = 10, height = 10;
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                u8* glyphBmp = nullptr;
-
-				if (fontCache) {
-					auto pair = std::make_pair(codepoint, fontSize);
-					auto found = cache.find(pair);
-					if (found != cache.end()) {
-						glyphBmp = found -> second.pointer;
-						width = found -> second.width;
-						height = found -> second.height;
-					}
-					else {
-						glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
-						if (glyphBmp) cache[pair] = GlyphInfo{glyphBmp, width, height};
-					}
-				}
-				else {
-					glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
-				}
-#else
                 u8 *glyphBmp = stbtt_GetCodepointBitmap(font, fontSize, fontSize, codepoint, &width, &height, nullptr, nullptr);
-#endif
 
                 if (glyphBmp == nullptr)
                     return;
@@ -1718,20 +1571,8 @@ namespace tsl {
                         this->setPixelBlendSrc(x + bmpX, y + bmpY, tmpColor);
                     }
                 }
-
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (!fontCache)
-#endif
-                    std::free(glyphBmp);
+                std::free(glyphBmp);
             }
-
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            inline void setLayerPosImpl(u32 x, u32 y) {
-				cfg::LayerPosX = x;
-				cfg::LayerPosY = y;
-				ASSERT_FATAL(viSetLayerPosition(&this->m_layer, cfg::LayerPosX, cfg::LayerPosY));
-			}
-#endif
         };
 
     }
@@ -1755,14 +1596,6 @@ namespace tsl {
         public:
             Element() {}
             virtual ~Element() { }
-
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            std::string highlightColor1Str = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "highlight_color_1");
-            std::string highlightColor2Str = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "highlight_color_2");
-
-            Color highlightColor1 = RGB888(highlightColor1Str, "#2288CC");
-            Color highlightColor2 = RGB888(highlightColor2Str, "#88FFFF");
-#endif
    
             /**
              * @brief Handles focus requesting
@@ -1937,53 +1770,6 @@ namespace tsl {
              * @param renderer Renderer
              */
             virtual void drawHighlight(gfx::Renderer *renderer) {
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                // Get the current time
-                auto currentTime = std::chrono::system_clock::now();
-                auto timeInSeconds = std::chrono::duration<double>(currentTime.time_since_epoch()).count();
-
-                // Calculate the progress for one full sine wave per second
-                const double cycleDuration = 1.0;  // 1 second for one full sine wave
-                double timeCounter = fmod(timeInSeconds, cycleDuration);
-                float progress = (std::sin(2 * M_PI * timeCounter / cycleDuration) + 1) / 2;
-
-                Color highlightColor = {
-                    static_cast<u8>((highlightColor1.r - highlightColor2.r) * progress + highlightColor2.r),
-                    static_cast<u8>((highlightColor1.g - highlightColor2.g) * progress + highlightColor2.g),
-                    static_cast<u8>((highlightColor1.b - highlightColor2.b) * progress + highlightColor2.b),
-                    0xF
-                };
-                s32 x = 0, y = 0;
-
-                if (this->m_highlightShaking) {
-                    auto t = (std::chrono::system_clock::now() - this->m_highlightShakingStartTime);
-                    if (t >= 100ms)
-                        this->m_highlightShaking = false;
-                    else {
-                        s32 amplitude = std::rand() % 5 + 5;
-
-                        switch (this->m_highlightShakingDirection) {
-                            case FocusDirection::Up:
-                                y -= shakeAnimation(t, amplitude);
-                                break;
-                            case FocusDirection::Down:
-                                y += shakeAnimation(t, amplitude);
-                                break;
-                            case FocusDirection::Left:
-                                x -= shakeAnimation(t, amplitude);
-                                break;
-                            case FocusDirection::Right:
-                                x += shakeAnimation(t, amplitude);
-                                break;
-                            default:
-                                break;
-                        }
-
-                        x = std::clamp(x, -amplitude, amplitude);
-                        y = std::clamp(y, -amplitude, amplitude);
-                    }
-                }
-#else
                 static float counter = 0;
                 const float progress = (std::sin(counter) + 1) / 2;
                 Color highlightColor = {   static_cast<u8>((0x2 - 0x8) * progress + 0x8),
@@ -2023,7 +1809,7 @@ namespace tsl {
                         y = std::clamp(y, -amplitude, amplitude);
                     }
                 }
-#endif
+
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y - 4, this->getWidth() + 8, 4, a(highlightColor));
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y + this->getHeight(), this->getWidth() + 8, 4, a(highlightColor));
                 renderer->drawRect(this->getX() + x - 4, this->getY() + y, 4, this->getHeight(), a(highlightColor));
@@ -2197,14 +1983,6 @@ namespace tsl {
          */
         class OverlayFrame : public Element {
         public:
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            std::string defaultTextColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "text_color");
-            Color defaultTextColor = RGB888(defaultTextColorStr);
-            std::string clockColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "clock_color");
-            Color clockColor = RGB888(clockColorStr);
-            std::string batteryColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "battery_color");
-            Color batteryColor = RGB888(batteryColorStr);
-#endif
             /**
              * @brief Constructor
              *
@@ -2218,7 +1996,7 @@ namespace tsl {
             }
 
             virtual void draw(gfx::Renderer *renderer) override {
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY) && !defined(BUILD_ZING)
+#if !defined(BUILD_ZING)
                 renderer->fillScreen(a(tsl::style::color::ColorFrameBackground));
                 renderer->drawRect(tsl::cfg::FramebufferWidth - 1, 0, 1, tsl::cfg::FramebufferHeight, a(0xF222));
 #else
@@ -2226,30 +2004,25 @@ namespace tsl {
 #endif
 
                 if (!this->m_title.empty())
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                    renderer->drawString(this->m_title.c_str(), false, 20, 50, 30, a(defaultTextColor));
-#else
                     renderer->drawString(this->m_title.c_str(), false, 20, 50, 30, a(tsl::style::color::ColorText));
-#endif
+
                 if (!this->m_subtitle.empty())
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(defaultTextColor));
-#elif defined(BUILD_ZING)
+#if defined(BUILD_ZING)
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorText));
 #else
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
 #endif
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(defaultTextColor));
-#elif defined(BUILD_ZING)
+                if (!this->m_subtitle.empty())
+                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
+
+#if defined(BUILD_ZING)
                 if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #else
                 renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #endif
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                if (!deactivateOriginalFooter) renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(defaultTextColor));
-#elif defined(BUILD_ZING)
+
+#if defined(BUILD_ZING)
                 if (!deactivateOriginalFooter) renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
 #else
                 renderer->drawString(renderer->getMainFrameButtonText().c_str(), false, 30, 693, 23, a(tsl::style::color::ColorText));
@@ -2262,7 +2035,7 @@ namespace tsl {
                 this->setBoundaries(parentX, parentY, parentWidth, parentHeight);
 
                 if (this->m_contentElement != nullptr) {
-#if defined(BUILD_STATUS_MONITOR_OVERLAY) || defined(BUILD_ZING)
+#if defined(BUILD_ZING)
                     if ( this->m_title.empty() && this->m_subtitle.empty())
                         this->m_contentElement->setBoundaries(parentX, parentY, parentWidth - 30, parentHeight);
                     else
@@ -2787,10 +2560,6 @@ namespace tsl {
          */
         class ListItem : public Element {
         public:
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            std::string defaultTextColorStr = parseValueFromIniSection("/config/ultrahand/theme.ini", "theme", "text_color");
-            Color defaultTextColor = RGB888(defaultTextColorStr);
-#endif
             /**
              * @brief Constructor
              *
@@ -2828,13 +2597,8 @@ namespace tsl {
                     }
                 }
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                renderer->drawRect(this->getX(), this->getY(), this->getWidth(), 1, a({ 0x4, 0x4, 0x4, 0xF  }));
-				renderer->drawRect(this->getX(), this->getTopBound(), this->getWidth(), 1, a({ 0x0, 0x0, 0x0, 0xD }));
-#else
                 renderer->drawRect(this->getX(), this->getY(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
                 renderer->drawRect(this->getX(), this->getTopBound(), this->getWidth(), 1, a(tsl::style::color::ColorFrame));
-#endif
 
                 if (this->m_trunctuated) {
                     if (this->m_focused) {
@@ -2855,11 +2619,7 @@ namespace tsl {
                         renderer->drawString(this->m_ellipsisText.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(tsl::style::color::ColorText));
                     }
                 } else {
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-                    renderer->drawString(this->m_text.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(defaultTextColor));
-#else
                     renderer->drawString(this->m_text.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(tsl::style::color::ColorText));
-#endif
                 }
 
                 renderer->drawString(this->m_value.c_str(), false, this->getX() + this->m_maxWidth + 45, this->getY() + 45, 20, this->m_faint ? a(tsl::style::color::ColorDescription) : a(tsl::style::color::ColorHighlight));
@@ -3618,11 +3378,7 @@ namespace tsl {
                 this->m_disableNextAnimation = false;
             }
             else {
-#ifndef BUILD_STATUS_MONITOR_OVERLAY
                 this->m_fadeInAnimationPlaying = true;
-#else
-                this->m_fadeInAnimationPlaying = false;
-#endif
                 this->m_animationCounter = 0;
             }
 
@@ -3642,11 +3398,7 @@ namespace tsl {
                 this->m_disableNextAnimation = false;
             }
             else {
-#ifndef BUILD_STATUS_MONITOR_OVERLAY
                 this->m_fadeOutAnimationPlaying = true;
-#else
-                this->m_fadeOutAnimationPlaying = false;
-#endif
                 this->m_animationCounter = 5;
             }
 
@@ -3809,10 +3561,8 @@ namespace tsl {
 
             if (currentFocus == nullptr) {
                 if (keysDown & HidNpadButton_B) {
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY)
                     if (!currentGui->handleInput(HidNpadButton_B, 0,{},{},{}))
                         this->goBack();
-#endif
                     return;
                 }
 
@@ -3864,10 +3614,8 @@ namespace tsl {
                     }
                     repeatTick++;
                 } else {
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY)
                     if (keysDown & HidNpadButton_B)
                         this->goBack();
-#endif
                     repeatTick = 0;
                     shouldShake = true;
                 }
@@ -3919,10 +3667,8 @@ namespace tsl {
             } else {
                 if (oldTouchPos.x < 150U && oldTouchPos.y > cfg::FramebufferHeight - 73U)
                     if (initialTouchPos.x < 150U && initialTouchPos.y > cfg::FramebufferHeight - 73U)
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY)
                         if (!currentGui->handleInput(HidNpadButton_B, 0,{},{},{}))
                             this->goBack();
-#endif
                 elm::Element::setInputMode(InputMode::Controller);
 
                 oldTouchPos = { 0 };
@@ -3975,15 +3721,6 @@ namespace tsl {
 
             this->m_guiStack.push(std::move(gui));
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            if (cache.size()) {
-				for (const auto& [key, value] : cache) {
-					std::free(value.pointer);
-				}
-				cache.clear();
-			}
-#endif
-
             return this->m_guiStack.top();
         }
 
@@ -4005,15 +3742,6 @@ namespace tsl {
          * @note The Overlay gets closes once there are no more Guis on the stack
          */
         void goBack() {
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-            if (cache.size()) {
-				for (const auto& [key, value] : cache) {
-					std::free(value.pointer);
-				}
-				cache.clear();
-			}
-#endif
-
             if (!this->m_closeOnExit && this->m_guiStack.size() == 1) {
                 this->hide();
                 return;
@@ -4112,9 +3840,8 @@ namespace tsl {
             padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadSystemExt);
 
             // Initialize pad
-#if !defined(BUILD_STATUS_MONITOR_OVERLAY) && !defined(BUILD_ZING)
             PadState pad;
-#endif
+
             padInitializeAny(&pad);
 
             // Initialize touch screen
@@ -4209,14 +3936,6 @@ namespace tsl {
         Overlay::get()->goBack();
     }
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-    static void setNextOverlay(std::string ovlPath, std::string args) {
-
-		args += " --skipCombo";
-
-		envSetNextLoad(ovlPath.c_str(), args.c_str());
-	}
-#else
     static void setNextOverlay(const std::string& ovlPath, std::string origArgs) {
 
         std::string args = std::filesystem::path(ovlPath).filename();
@@ -4224,7 +3943,6 @@ namespace tsl {
 
         envSetNextLoad(ovlPath.c_str(), args.c_str());
     }
-#endif
 
     /**
      * @brief libtesla's main function
@@ -4332,16 +4050,9 @@ namespace tsl::cfg {
     u64 launchCombo = HidNpadButton_L | HidNpadButton_Down | HidNpadButton_StickR;
 }
 
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-extern "C" void __libnx_init_time(void);
-#endif
-
 extern "C" {
 
     u32 __nx_applet_type = AppletType_None;
-#if defined(BUILD_STATUS_MONITOR_OVERLAY)
-    u32 __nx_fs_num_sessions = 1;
-#endif
     u32  __nx_nv_transfermem_size = 0x40000;
     ViLayerFlags __nx_vi_stray_layer_flags = (ViLayerFlags)0;
 
