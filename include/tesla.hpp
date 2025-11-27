@@ -2013,9 +2013,6 @@ namespace tsl {
                     renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
 #endif
 
-                if (!this->m_subtitle.empty())
-                    renderer->drawString(this->m_subtitle.c_str(), false, 20, 70, 15, a(tsl::style::color::ColorDescription));
-
 #if defined(BUILD_ZING)
                 if (FullMode == true) renderer->drawRect(15, tsl::cfg::FramebufferHeight - 73, tsl::cfg::FramebufferWidth - 30, 1, a(tsl::style::color::ColorText));
 #else
@@ -3840,7 +3837,9 @@ namespace tsl {
             padConfigureInput(8, HidNpadStyleSet_NpadStandard | HidNpadStyleTag_NpadSystemExt);
 
             // Initialize pad
-            PadState pad;
+#if !defined(BUILD_ZING)
+             PadState pad;
+#endif
 
             padInitializeAny(&pad);
 
