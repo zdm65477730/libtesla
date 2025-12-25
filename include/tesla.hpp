@@ -2562,8 +2562,8 @@ namespace tsl {
              *
              * @param text Initial description text
              */
-            ListItem(const std::string& text, const std::string& value = "")
-                : Element(), m_text(text), m_value(value) {
+            ListItem(const std::string& text, const std::string& value = "", Color value_color = style::color::ColorHighlight, Color faint_color = style::color::ColorDescription)
+                : Element(), m_text(text), m_value(value), m_value_color{value_color}, m_faint_color{faint_color} {
             }
             virtual ~ListItem() {}
 
@@ -2619,7 +2619,7 @@ namespace tsl {
                     renderer->drawString(this->m_text.c_str(), false, this->getX() + 20, this->getY() + 45, 23, a(tsl::style::color::ColorText));
                 }
 
-                renderer->drawString(this->m_value.c_str(), false, this->getX() + this->m_maxWidth + 45, this->getY() + 45, 20, this->m_faint ? a(tsl::style::color::ColorDescription) : a(tsl::style::color::ColorHighlight));
+                renderer->drawString(this->m_value.c_str(), false, this->getX() + this->m_maxWidth + 45, this->getY() + 45, 20, this->m_faint ? a(m_faint_color) : a(m_value_color));
             }
 
             virtual void layout(u16 parentX, u16 parentY, u16 parentWidth, u16 parentHeight) override {
@@ -2692,6 +2692,24 @@ namespace tsl {
             }
 
             /**
+             * @brief Sets the value color
+             *
+             * @param value_color color of the value
+             */
+            inline void setValueColor(Color value_color) {
+                this->m_value_color = value_color;
+            }
+
+            /**
+             * @brief Sets the faint color
+             *
+             * @param faint_color color of the faint
+             */
+            inline void setFaintColor(Color faint_color) {
+                this->m_faint_color = faint_color;
+            }
+
+            /**
              * @brief Gets the left hand description text of the list item
              *
              * @return Text
@@ -2714,6 +2732,9 @@ namespace tsl {
             std::string m_value = "";
             std::string m_scrollText = "";
             std::string m_ellipsisText = "";
+
+            Color m_value_color;
+            Color m_faint_color;
 
             bool m_scroll = false;
             bool m_trunctuated = false;
