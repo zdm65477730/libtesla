@@ -1071,35 +1071,28 @@ namespace tsl {
 
                 static std::unordered_map<u64, Glyph> s_glyphCache;
 
-                if (string == nullptr) {
-                    return {0, 0};
-                }
-
-                if (*string == '\0') {
-                    return {0, 0};
-                }
-
-                while (true) {
+                do {
                     if (maxWidth > 0 && maxWidth < (currX - x))
                         break;
 
                     u32 currCharacter;
                     ssize_t codepointWidth = decode_utf8(&currCharacter, reinterpret_cast<const u8*>(string));
 
-                    if (codepointWidth <= 0 || currCharacter == '\0') {
+                    if (codepointWidth <= 0)
                         break;
-                    }
 
                     string += codepointWidth;
 
                     if (currCharacter == '\n') {
                         maxX = std::max(currX, maxX);
+
                         currX = x;
 #ifndef BUILD_ZING
                         currY += fontSize;
 #else
                         currY += fontSize+3;
 #endif
+
                         continue;
                     }
 
@@ -1109,6 +1102,7 @@ namespace tsl {
 
                     auto it = s_glyphCache.find(key);
                     if (it == s_glyphCache.end()) {
+                        /* Cache glyph */
                         glyph = &s_glyphCache.emplace(key, Glyph()).first->second;
 
                         if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
@@ -1128,10 +1122,12 @@ namespace tsl {
 
                         glyph->glyphBmp = stbtt_GetCodepointBitmap(glyph->currFont, glyph->currFontSize, glyph->currFontSize, currCharacter, &glyph->width, &glyph->height, nullptr, nullptr);
                     } else {
+                        /* Use cached glyph */
                         glyph = &it->second;
                     }
 
                     if (glyph->glyphBmp != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0) {
+
                         auto x = currX + glyph->bounds[0];
                         auto y = currY + glyph->bounds[1];
                         for (s32 bmpY = 0; bmpY < glyph->height; bmpY++) {
@@ -1146,14 +1142,12 @@ namespace tsl {
                                 }
                             }
                         }
+
                     }
 
                     currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
 
-                    if (*string == '\0') {
-                        break;
-                    }
-                }
+                } while (*string != '\0');
 
                 maxX = std::max(currX, maxX);
 
@@ -1161,6 +1155,7 @@ namespace tsl {
                 m_maxX = std::max(m_maxX, maxX);
                 m_maxY = std::max(m_maxY, currY);
 #endif
+
                 return { maxX - x, currY - y };
             }
 
