@@ -523,151 +523,158 @@ namespace tsl {
     }
 
     namespace tr {
-        namespace {
-            constexpr auto DefaultUnknownString = "???";
+		namespace {
+			constexpr const char* DefaultUnknownString = "???";
+			constexpr const char* DefaultBaseLang = "en";
 
-            using LanguageStrings = std::map<std::string, std::string>;
-            LanguageStrings g_SystemLanguageStrings;
-            std::string g_baseLang{"None"};
+			enum class SystemLanguage {
+				Unknown,
+				ja, en, fr, de, it, es,
+				zh_Hans, ko, nl, pt, ru, zh_Hant
+			};
 
-            Result GetSysBaseLang(std::string &sysBaseLang) {
-                if (g_baseLang != "None") {
-                    sysBaseLang = g_baseLang;
-                    return 0;
-                }
+			using LanguageStrings = std::unordered_map<std::string, std::string>;
+			LanguageStrings g_SystemLanguageStrings;
+			SystemLanguage g_baseLang = SystemLanguage::Unknown;
 
-                Result rc;
-                if(R_SUCCEEDED(rc = setInitialize())) {
-                    u64 languageCode;
-                    if (R_SUCCEEDED(rc = setGetSystemLanguage(&languageCode))) {
-                        SetLanguage language{SetLanguage_ENUS};
-                        if (R_SUCCEEDED(rc = setMakeLanguage(languageCode, &language))) {
-                            switch (language) {
-                            case SetLanguage_JA:
-                                g_baseLang = "ja";
-                                break;
-                            case SetLanguage_ENUS:
-                            case SetLanguage_ENGB:
-                                g_baseLang = "en";
-                                break;
-                            case SetLanguage_FR:
-                            case SetLanguage_FRCA:
-                                g_baseLang = "fr";
-                                break;
-                            case SetLanguage_DE:
-                                g_baseLang = "de";
-                                break;
-                            case SetLanguage_IT:
-                                g_baseLang = "it";
-                                break;
-                            case SetLanguage_ES:
-                            case SetLanguage_ES419:
-                                g_baseLang = "es";
-                                break;
-                            case SetLanguage_ZHCN:
-                            case SetLanguage_ZHHANS:
-                                g_baseLang = "zh-Hans";
-                                break;
-                            case SetLanguage_KO:
-                                g_baseLang = "ko";
-                                break;
-                            case SetLanguage_NL:
-                                g_baseLang = "nl";
-                                break;
-                            case SetLanguage_PT:
-                            case SetLanguage_PTBR:
-                                g_baseLang = "pt";
-                                break;
-                            case SetLanguage_RU:
-                                g_baseLang = "ru";
-                                break;
-                            case SetLanguage_ZHTW:
-                            case SetLanguage_ZHHANT:
-                                g_baseLang = "zh-Hant";
-                                break;
-                            default:
-                                g_baseLang = "en";
-                                break;
-                            }
-                        }
-                    }
-                    setExit();
-                }
+			constexpr const char* LangEnumToString(SystemLanguage lang) noexcept {
+				switch (lang) {
+					case SystemLanguage::ja:       return "ja";
+					case SystemLanguage::en:       return "en";
+					case SystemLanguage::fr:       return "fr";
+					case SystemLanguage::de:       return "de";
+					case SystemLanguage::it:       return "it";
+					case SystemLanguage::es:       return "es";
+					case SystemLanguage::zh_Hans:  return "zh-Hans";
+					case SystemLanguage::ko:       return "ko";
+					case SystemLanguage::nl:       return "nl";
+					case SystemLanguage::pt:       return "pt";
+					case SystemLanguage::ru:       return "ru";
+					case SystemLanguage::zh_Hant:  return "zh-Hant";
+					default:                       return DefaultBaseLang;
+				}
+			}
 
-                sysBaseLang = g_baseLang;
-                return rc;
-            }
+			Result GetSysBaseLang(SystemLanguage &sysBaseLang) {
+				if (g_baseLang != SystemLanguage::Unknown) {
+					sysBaseLang = g_baseLang;
+					return 0;
+				}
 
-            void fillLangStrings(nlohmann::json &json, LanguageStrings &out_strs) {
-                if(!json.empty()) {
-                    for(auto item : json.items()) {
-                        out_strs[item.key()] = item.value();
-                    }
-                }
-            }
+				Result rc = 0;
+				if (R_SUCCEEDED(rc = setInitialize())) {
+					u64 languageCode = 0;
+					if (R_SUCCEEDED(rc = setGetSystemLanguage(&languageCode))) {
+						SetLanguage language = SetLanguage_ENUS;
+						if (R_SUCCEEDED(rc = setMakeLanguage(languageCode, &language))) {
+							switch (language) {
+								case SetLanguage_JA:       g_baseLang = SystemLanguage::ja; break;
+								case SetLanguage_ENUS:
+								case SetLanguage_ENGB:     g_baseLang = SystemLanguage::en; break;
+								case SetLanguage_FR:
+								case SetLanguage_FRCA:     g_baseLang = SystemLanguage::fr; break;
+								case SetLanguage_DE:       g_baseLang = SystemLanguage::de; break;
+								case SetLanguage_IT:       g_baseLang = SystemLanguage::it; break;
+								case SetLanguage_ES:
+								case SetLanguage_ES419:    g_baseLang = SystemLanguage::es; break;
+								case SetLanguage_ZHCN:
+								case SetLanguage_ZHHANS:   g_baseLang = SystemLanguage::zh_Hans; break;
+								case SetLanguage_KO:       g_baseLang = SystemLanguage::ko; break;
+								case SetLanguage_NL:       g_baseLang = SystemLanguage::nl; break;
+								case SetLanguage_PT:
+								case SetLanguage_PTBR:     g_baseLang = SystemLanguage::pt; break;
+								case SetLanguage_RU:       g_baseLang = SystemLanguage::ru; break;
+								case SetLanguage_ZHTW:
+								case SetLanguage_ZHHANT:   g_baseLang = SystemLanguage::zh_Hant; break;
+								default:                   g_baseLang = SystemLanguage::en; break;
+							}
+						}
+					}
+					setExit();
+				}
 
-            bool LoadLanguageStrings(std::string &langPath, std::string &lang, LanguageStrings &out_strs) {
-                std::string langFilePath = langPath + lang + ".json";
-                if (!std::filesystem::exists(langFilePath)) return true;
+				if (g_baseLang == SystemLanguage::Unknown)
+					g_baseLang = SystemLanguage::en;
 
-                bool ok = false;
-                try {
-                    std::ifstream ifs(langFilePath);
-                    auto lang_json = nlohmann::json::parse(ifs);
-                    fillLangStrings(lang_json, out_strs);
-                    ok = true;
-                }
-                catch(std::exception&) {
-                    ok = false;
-                }
-                return ok;
-            }
+				sysBaseLang = g_baseLang;
+				return rc;
+			}
 
-            bool LoadTrans(std::string &langPath, LanguageStrings &out_strs) {
-                bool ok = false;
-                std::string base_lang;
-                if (R_SUCCEEDED(GetSysBaseLang(base_lang))) {
-                    ok = LoadLanguageStrings(langPath, base_lang, out_strs);
-                }
+			void fillLangStrings(const nlohmann::json &json, LanguageStrings &out_strs) {
+				if (json.empty() || !json.is_object()) return;
 
-                return ok;
-            }
+				for (const auto& [key, value] : json.items()) {
+					if (!key.empty() && value.is_string()) {
+						const std::string& val = value.get<std::string>();
+						out_strs[key] = val.empty() ? DefaultUnknownString : val;
+					}
+				}
+			}
 
-            std::string Translate(const std::string &key) {
-                if(g_SystemLanguageStrings.count(key)) {
-                    return g_SystemLanguageStrings.at(key);
-                } else {
-                    return DefaultUnknownString;
-                }
-            }
-        }
+			bool LoadLanguageStrings(const std::string& langPath, SystemLanguage lang, LanguageStrings& out_strs) {
+				std::string langFilePath = langPath;
+				if (!langFilePath.empty() && langFilePath.back() != '/')
+					langFilePath += '/';
+				langFilePath += LangEnumToString(lang);
+				langFilePath += ".json";
 
-        inline Result GetSysBaseLanguage(std::string &base_lang) {
-            return GetSysBaseLang(base_lang);
-        }
+				if (!std::filesystem::exists(langFilePath))
+					return true;
 
-        /* call within tsl::hlp::doWithSDCardHandle([&]() {} */
-        inline bool InitTrans(std::string &langPath, std::string &defaultTrans) {
-            if (!std::filesystem::exists(langPath)) return false;
-            if (!defaultTrans.size()) return false;
+				std::ifstream ifs(langFilePath, std::ios::binary);
+				if (!ifs) return false;
 
-            bool ok = false;
-            try {
-                if (g_SystemLanguageStrings.empty()) {
-                    auto lang_json = nlohmann::json::parse(defaultTrans);
-                    fillLangStrings(lang_json, g_SystemLanguageStrings);
-                    ok = LoadTrans(langPath, g_SystemLanguageStrings);
-                }
-            } catch(std::exception&) {
-                ok = false;
-            }
-            return ok;
-        }
-    }
+				nlohmann::json lang_json = nlohmann::json::parse(ifs);
+				fillLangStrings(lang_json, out_strs);
+				return true;
+			}
 
-    inline std::string operator ""_tr(const char *key_lit, size_t key_lit_size) {
-        return tr::Translate(std::string(key_lit, key_lit_size));
-    }
+			bool LoadTrans(const std::string& langPath, LanguageStrings& out_strs) {
+				SystemLanguage base_lang = SystemLanguage::Unknown;
+				if (R_SUCCEEDED(GetSysBaseLang(base_lang))) {
+					return LoadLanguageStrings(langPath, base_lang, out_strs);
+				}
+				return false;
+			}
+
+			std::string Translate(std::string_view key) {
+				if (key.empty())
+					return DefaultUnknownString;
+
+				auto it = g_SystemLanguageStrings.find(std::string(key));
+				if (it != g_SystemLanguageStrings.end() && !it->second.empty()) {
+					return it->second;
+				}
+				return DefaultUnknownString;
+			}
+		}
+
+		inline Result GetSysBaseLanguage(std::string &base_lang) {
+			SystemLanguage lang;
+			Result rc = GetSysBaseLang(lang);
+			base_lang = LangEnumToString(lang);
+			return rc;
+		}
+
+		inline bool InitTrans(const std::string &langPath, const std::string &defaultTrans) {
+			if (langPath.empty() || defaultTrans.empty())
+				return false;
+
+			g_SystemLanguageStrings.clear();
+
+			nlohmann::json default_json = nlohmann::json::parse(defaultTrans);
+			fillLangStrings(default_json, g_SystemLanguageStrings);
+
+			return LoadTrans(langPath, g_SystemLanguageStrings);
+		}
+	}
+
+	inline std::string operator ""_tr(const char *key_lit, size_t key_lit_size) noexcept {
+		if (!key_lit || key_lit_size == 0)
+			return tr::DefaultUnknownString;
+
+		return tr::Translate(std::string_view(key_lit, key_lit_size));
+	}
 
     // Renderer
 
