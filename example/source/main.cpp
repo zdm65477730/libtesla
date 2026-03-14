@@ -7,7 +7,7 @@ public:
     GuiSecondary() {}
 
     virtual tsl::elm::Element* createUI() override {
-        auto *rootFrame = new tsl::elm::OverlayFrame("Tesla Example", "v1.3.2 - Secondary Gui");
+        auto *rootFrame = new tsl::elm::OverlayFrame("Tesla Example", "v1.3.3 - Secondary Gui");
 
         rootFrame->setContent(new tsl::elm::DebugRectangle(tsl::Color{ 0x8, 0x3, 0x8, 0xF }));
 
@@ -24,7 +24,7 @@ public:
     virtual tsl::elm::Element* createUI() override {
         // A OverlayFrame is the base element every overlay consists of. This will draw the default Title and Subtitle.
         // If you need more information in the header or want to change it's look, use a HeaderOverlayFrame.
-        auto frame = new tsl::elm::OverlayFrame("Tesla Example", "v1.3.2");
+        auto frame = new tsl::elm::OverlayFrame("Tesla Example", "v1.3.3");
 
         // A list that can contain sub elements and handles scrolling
         auto list = new tsl::elm::List();
