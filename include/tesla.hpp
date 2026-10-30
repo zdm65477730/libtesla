@@ -33,6 +33,7 @@
 #include <cstring>
 #include <cwctype>
 #include <string>
+#include <string_view>
 #include <functional>
 #include <type_traits>
 #include <mutex>
@@ -75,21 +76,23 @@
     })
 
 #if defined(BUILD_ZING)
-u8 TeslaFPS = 60;
-bool IsFrameBackground = true;
-bool FullMode = true;
-uint16_t framebufferWidth = 448;
-uint16_t framebufferHeight = 720;
-bool deactivateOriginalFooter = false;
+// inline: this header is included by several translation units, each of them would otherwise
+// define its own copy of these settings
+inline u8 TeslaFPS = 60;
+inline bool IsFrameBackground = true;
+inline bool FullMode = true;
+inline uint16_t framebufferWidth = 448;
+inline uint16_t framebufferHeight = 720;
+inline bool deactivateOriginalFooter = false;
 
-PadState pad;
+inline PadState pad;
 #endif
 
 #ifdef BUILD_ZING
 typedef struct {
     u32 A = 0, B = 0;                                   ///< UniquePadId
 } Breeze_state;
-Breeze_state Bstate = {};
+inline Breeze_state Bstate = {};
 #endif
 
 using namespace std::literals::string_literals;
@@ -247,13 +250,17 @@ namespace tsl {
          * @brief Wrapper for sd card access using stdio
          * @note Consider using raw fs calls instead as they are faster and need less space
          *
+         * The card is mounted only when it is not mounted yet, and unmounted again only when
+         * this wrapper did the mount, so a mount owned by __appInit or the caller survives.
+         *
          * @param f wrapped function
          */
         template<typename F>
         static inline void doWithSDCardHandle(F f) {
-            fsdevMountSdmc();
+            const bool mounted = R_SUCCEEDED(fsdevMountSdmc());
             f();
-            fsdevUnmountDevice("sdmc");
+            if (mounted)
+                fsdevUnmountDevice("sdmc");
         }
 
         /**
@@ -523,50 +530,64 @@ namespace tsl {
     }
 
     namespace tr {
-		namespace {
-			constexpr const char* DefaultUnknownString = "???";
-			constexpr const char* DefaultBaseLang = "en";
+		// Stateless helpers of the translation layer
+		constexpr std::string_view DefaultUnknownString = "???";
+		constexpr std::string_view DefaultBaseLang = "en";
 
-			enum class SystemLanguage {
-				Unknown,
-				ja, en, fr, de, it, es,
-				zh_Hans, ko, nl, pt, ru, zh_Hant
-			};
+		enum class SystemLanguage {
+			Unknown,
+			ja, en, fr, de, it, es,
+			zh_Hans, ko, nl, pt, ru, zh_Hant
+		};
 
-			using LanguageStrings = std::unordered_map<std::string, std::string>;
-			LanguageStrings g_SystemLanguageStrings;
-			SystemLanguage g_baseLang = SystemLanguage::Unknown;
-
-			constexpr const char* LangEnumToString(SystemLanguage lang) noexcept {
-				switch (lang) {
-					case SystemLanguage::ja:       return "ja";
-					case SystemLanguage::en:       return "en";
-					case SystemLanguage::fr:       return "fr";
-					case SystemLanguage::de:       return "de";
-					case SystemLanguage::it:       return "it";
-					case SystemLanguage::es:       return "es";
-					case SystemLanguage::zh_Hans:  return "zh-Hans";
-					case SystemLanguage::ko:       return "ko";
-					case SystemLanguage::nl:       return "nl";
-					case SystemLanguage::pt:       return "pt";
-					case SystemLanguage::ru:       return "ru";
-					case SystemLanguage::zh_Hant:  return "zh-Hant";
-					default:                       return DefaultBaseLang;
-				}
+		// Compile-time language mapping, no runtime cost
+		[[nodiscard]] constexpr std::string_view LangEnumToString(SystemLanguage lang) noexcept {
+			switch (lang) {
+				case SystemLanguage::ja:       return "ja";
+				case SystemLanguage::en:       return "en";
+				case SystemLanguage::fr:       return "fr";
+				case SystemLanguage::de:       return "de";
+				case SystemLanguage::it:       return "it";
+				case SystemLanguage::es:       return "es";
+				case SystemLanguage::zh_Hans:  return "zh-Hans";
+				case SystemLanguage::ko:       return "ko";
+				case SystemLanguage::nl:       return "nl";
+				case SystemLanguage::pt:       return "pt";
+				case SystemLanguage::ru:       return "ru";
+				case SystemLanguage::zh_Hant:  return "zh-Hant";
+				default:                       return DefaultBaseLang;
 			}
+		}
 
-			Result GetSysBaseLang(SystemLanguage &sysBaseLang) {
-				if (g_baseLang != SystemLanguage::Unknown) {
-					sysBaseLang = g_baseLang;
-					return 0;
-				}
+		// Translation cache: string_views that own nothing and point into kept-alive buffers
+		using TransCache = std::unordered_map<std::string_view, std::string_view>;
 
-				Result rc = 0;
-				if (R_SUCCEEDED(rc = setInitialize())) {
+		// State of the whole program, not of a single translation unit: InitTrans() fills the cache
+		// once and every _tr() call reads it, so all of it is inline
+		inline std::once_flag g_langInitFlag;
+		inline SystemLanguage g_baseLang = SystemLanguage::Unknown;
+		inline TransCache g_transCache;
+		// Cached views must point into live memory: the parsed json documents are held here until
+		// the process ends, so no entry can dangle
+		inline nlohmann::json g_defaultJson;
+		inline nlohmann::json g_langJson;
+
+		/**
+		 * @brief System language of the console, read exactly once and then cached
+		 *
+		 * @param sysBaseLang Filled with the language of the console
+		 * @return 0; en is assumed when the setting cannot be read
+		 */
+		inline Result GetSysBaseLang(SystemLanguage &sysBaseLang) {
+			std::call_once(g_langInitFlag, []{
+				// sm: is reference counted, so opening our own session here is safe even when this
+				// runs inside one of the caller's sessions
+				tsl::hlp::doWithSmSession([]{
 					u64 languageCode = 0;
-					if (R_SUCCEEDED(rc = setGetSystemLanguage(&languageCode))) {
-						SetLanguage language = SetLanguage_ENUS;
-						if (R_SUCCEEDED(rc = setMakeLanguage(languageCode, &language))) {
+					SetLanguage language = SetLanguage_ENUS;
+
+					if (R_SUCCEEDED(setInitialize())) {
+						if (R_SUCCEEDED(setGetSystemLanguage(&languageCode)) && R_SUCCEEDED(setMakeLanguage(languageCode, &language))) {
 							switch (language) {
 								case SetLanguage_JA:       g_baseLang = SystemLanguage::ja; break;
 								case SetLanguage_ENUS:
@@ -589,89 +610,152 @@ namespace tsl {
 								default:                   g_baseLang = SystemLanguage::en; break;
 							}
 						}
+
+						setExit();
 					}
-					setExit();
-				}
+				});
 
 				if (g_baseLang == SystemLanguage::Unknown)
 					g_baseLang = SystemLanguage::en;
+			});
 
-				sysBaseLang = g_baseLang;
-				return rc;
-			}
+			sysBaseLang = g_baseLang;
+			return 0;
+		}
 
-			void fillLangStrings(const nlohmann::json &json, LanguageStrings &out_strs) {
-				if (json.empty() || !json.is_object()) return;
+		// Fills the cache straight from a json object; no string is copied
+		inline void fillTransCache(const nlohmann::json &json, TransCache &outCache) {
+			if (!json.is_object() || json.empty())
+				return;
 
-				for (const auto& [key, value] : json.items()) {
-					if (!key.empty() && value.is_string()) {
-						const std::string& val = value.get<std::string>();
-						out_strs[key] = val.empty() ? DefaultUnknownString : val;
-					}
-				}
-			}
+			for (const auto& item : json.items()) {
+				const std::string_view keyView(item.key());
+				if (keyView.empty() || !item.value().is_string())
+					continue;
 
-			bool LoadLanguageStrings(const std::string& langPath, SystemLanguage lang, LanguageStrings& out_strs) {
-				std::string langFilePath = langPath;
-				if (!langFilePath.empty() && langFilePath.back() != '/')
-					langFilePath += '/';
-				langFilePath += LangEnumToString(lang);
-				langFilePath += ".json";
-
-				if (!std::filesystem::exists(langFilePath))
-					return true;
-
-				std::ifstream ifs(langFilePath, std::ios::binary);
-				if (!ifs) return false;
-
-				nlohmann::json lang_json = nlohmann::json::parse(ifs);
-				fillLangStrings(lang_json, out_strs);
-				return true;
-			}
-
-			bool LoadTrans(const std::string& langPath, LanguageStrings& out_strs) {
-				SystemLanguage base_lang = SystemLanguage::Unknown;
-				if (R_SUCCEEDED(GetSysBaseLang(base_lang))) {
-					return LoadLanguageStrings(langPath, base_lang, out_strs);
-				}
-				return false;
-			}
-
-			std::string Translate(std::string_view key) {
-				if (key.empty())
-					return DefaultUnknownString;
-
-				auto it = g_SystemLanguageStrings.find(std::string(key));
-				if (it != g_SystemLanguageStrings.end() && !it->second.empty()) {
-					return it->second;
-				}
-				return DefaultUnknownString;
+				const std::string_view valueView(item.value().get_ref<const std::string &>());
+				outCache[keyView] = valueView.empty() ? DefaultUnknownString : valueView;
 			}
 		}
 
+		/**
+		 * @brief Parses "<langPath>/<tag>.json" straight from the file into the caller-owned
+		 *        jsonOut, which keeps the cached views alive
+		 *
+		 * The card is mounted only while the file is looked up: __appInit() of this library does not
+		 * mount it, and a mount that belongs to the caller is left untouched.
+		 *
+		 * @param langPath Directory holding the per-language json files
+		 * @param langTag Language tag of the file to load
+		 * @param jsonOut Filled with the parsed document
+		 * @return true if the file exists and holds a json object
+		 */
+		inline bool LoadLanguageFile(const std::string& langPath, std::string_view langTag, nlohmann::json& jsonOut) {
+			if (langPath.empty() || langTag.empty())
+				return false;
+
+			std::string filePath;
+			filePath.reserve(langPath.size() + langTag.size() + 8U);
+			filePath.append(langPath);
+			if (filePath.back() != '/')
+				filePath.push_back('/');
+			filePath.append(langTag.data(), langTag.size());
+			filePath.append(".json");
+
+			const bool mounted = R_SUCCEEDED(fsdevMountSdmc());
+
+			bool loaded = false;
+			if (std::ifstream ifs(filePath, std::ios::binary); ifs.is_open()) {
+				// Non-throwing parse: a broken file must leave the built-in strings in place
+				nlohmann::json parsed = nlohmann::json::parse(ifs, nullptr, false, true);
+				if (parsed.is_object()) {
+					jsonOut = std::move(parsed);
+					loaded = true;
+				}
+			}
+
+			if (mounted)
+				fsdevUnmountDevice("sdmc");
+
+			return loaded;
+		}
+
+		/**
+		 * @brief Looks a key up in the loaded translations
+		 *
+		 * @param key Translation key
+		 * @return Translated string, "???" if the key is unknown
+		 */
+		[[nodiscard]] inline std::string Translate(std::string_view key) {
+			if (key.empty())
+				return std::string(DefaultUnknownString);
+
+			auto it = g_transCache.find(key);
+			if (it != g_transCache.cend() && !it->second.empty())
+				return std::string(it->second);
+
+			return std::string(DefaultUnknownString);
+		}
+
+		/**
+		 * @brief System language that translations and fonts follow
+		 */
+		inline SystemLanguage GetBaseLanguage() {
+			SystemLanguage lang = SystemLanguage::Unknown;
+			GetSysBaseLang(lang);
+			return lang;
+		}
+
+		/**
+		 * @brief System language of the console as BCP 47 tag, e.g. "de" or "zh-Hans"
+		 *
+		 * @param base_lang Filled with the tag
+		 * @return Result
+		 */
 		inline Result GetSysBaseLanguage(std::string &base_lang) {
-			SystemLanguage lang;
+			SystemLanguage lang = SystemLanguage::Unknown;
 			Result rc = GetSysBaseLang(lang);
-			base_lang = LangEnumToString(lang);
+			const auto tag = LangEnumToString(lang);
+			base_lang.assign(tag.data(), tag.size());
 			return rc;
 		}
 
+		/**
+		 * @brief Loads the built-in strings and then the file of the system language on top of them
+		 *
+		 * English is built in, so a language only needs a "<langPath>/<bcp47 tag>.json" file;
+		 * without one the built-in strings stay in place.
+		 *
+		 * @param langPath Directory holding the per-language json files
+		 * @param defaultTrans Built-in strings in json form
+		 * @return true if a language file was loaded
+		 */
 		inline bool InitTrans(const std::string &langPath, const std::string &defaultTrans) {
 			if (langPath.empty() || defaultTrans.empty())
 				return false;
 
-			g_SystemLanguageStrings.clear();
+			g_transCache.clear();
+			g_transCache.reserve(128);
+			g_defaultJson = nlohmann::json();
+			g_langJson = nlohmann::json();
 
-			nlohmann::json default_json = nlohmann::json::parse(defaultTrans);
-			fillLangStrings(default_json, g_SystemLanguageStrings);
+			// Built-in strings; the cached views point into g_defaultJson, which stays alive
+			g_defaultJson = nlohmann::json::parse(defaultTrans, nullptr, false, true);
+			fillTransCache(g_defaultJson, g_transCache);
 
-			return LoadTrans(langPath, g_SystemLanguageStrings);
+			// The file of the system language is layered on top of them
+			if (LoadLanguageFile(langPath, LangEnumToString(GetBaseLanguage()), g_langJson)) {
+				fillTransCache(g_langJson, g_transCache);
+				return true;
+			}
+
+			return false;
 		}
 	}
 
 	inline std::string operator ""_tr(const char *key_lit, size_t key_lit_size) noexcept {
 		if (!key_lit || key_lit_size == 0)
-			return tr::DefaultUnknownString;
+			return std::string(tr::DefaultUnknownString);
 
 		return tr::Translate(std::string_view(key_lit, key_lit_size));
 	}
@@ -681,6 +765,30 @@ namespace tsl {
     namespace gfx {
 
         extern "C" u64 __nx_vi_layer_id;
+
+        namespace detail {
+
+            /**
+             * @brief A glyph that was already rasterized for one codepoint, size and style
+             *
+             * The scaled metrics are kept next to the bitmap, so drawing the same string again
+             * only costs the blit. The bitmap is owned by the cache and released in
+             * Renderer::exit().
+             */
+            struct CachedGlyph {
+                stbtt_fontinfo *font = nullptr;
+                float fontSize = 0.0F;
+                int bounds[4] = {};
+                int xAdvance = 0;
+                u8 *bitmap = nullptr;
+                int width = 0, height = 0;
+            };
+
+            // One cache for the whole program. drawString() is inline, but a function local static
+            // could not be released from exit(), so the cache lives here
+            inline std::unordered_map<u64, CachedGlyph> glyphCache;
+
+        }
 
         struct ScissoringConfig {
             s32 x, y, w, h;
@@ -731,20 +839,30 @@ namespace tsl {
             // Drawing functions
 
             /**
+             * @brief Writes a pixel at an offset that is already translated and clipped
+             *
+             * @param offset Framebuffer offset returned by getPixelOffset()
+             * @param color Color
+             */
+            [[gnu::always_inline]] inline void setPixelWithOffset(u32 offset, Color color) {
+                static_cast<Color*>(this->getCurrentFramebuffer())[offset] = color;
+            }
+
+            /**
              * @brief Draw a single pixel onto the screen
              *
              * @param x X pos
              * @param y Y pos
              * @param color Color
              */
-            inline void setPixel(s32 x, s32 y, Color color) {
+            [[gnu::always_inline]] inline void setPixel(s32 x, s32 y, Color color) {
                 if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
                     return;
 
-                u32 offset = this->getPixelOffset(x, y);
+                const u32 offset = this->getPixelOffset(x, y);
 
                 if (offset != UINT32_MAX)
-                    static_cast<Color*>(this->getCurrentFramebuffer())[offset] = color;
+                    this->setPixelWithOffset(offset, color);
             }
 
             /**
@@ -755,7 +873,7 @@ namespace tsl {
              * @param alpha Opacity
              * @return Blended color
              */
-            inline u8 blendColor(u8 src, u8 dst, u8 alpha) {
+            [[gnu::always_inline]] inline u8 blendColor(u8 src, u8 dst, u8 alpha) {
                 u8 oneMinusAlpha = 0x0F - alpha;
 
                 return (dst * alpha + src * oneMinusAlpha) / float(0xF);
@@ -768,11 +886,13 @@ namespace tsl {
              * @param y Y pos
              * @param color Color
              */
-            inline void setPixelBlendSrc(s32 x, s32 y, Color color) {
+            [[gnu::always_inline]] inline void setPixelBlendSrc(s32 x, s32 y, Color color) {
                 if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
                     return;
 
-                u32 offset = this->getPixelOffset(x, y);
+                // The offset is translated and clipped once and then reused for the read and the
+                // write instead of being computed twice
+                const u32 offset = this->getPixelOffset(x, y);
 
                 if (offset == UINT32_MAX)
                     return;
@@ -786,7 +906,7 @@ namespace tsl {
                 end.b = this->blendColor(src.b, dst.b, dst.a);
                 end.a = src.a;
 
-                this->setPixel(x, y, end);
+                this->setPixelWithOffset(offset, end);
             }
 
             /**
@@ -796,11 +916,13 @@ namespace tsl {
              * @param y Y pos
              * @param color Color
              */
-            inline void setPixelBlendDst(s32 x, s32 y, Color color) {
+            [[gnu::always_inline]] inline void setPixelBlendDst(s32 x, s32 y, Color color) {
                 if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
                     return;
 
-                u32 offset = this->getPixelOffset(x, y);
+                // The offset is translated and clipped once and then reused for the read and the
+                // write instead of being computed twice
+                const u32 offset = this->getPixelOffset(x, y);
 
                 if (offset == UINT32_MAX)
                     return;
@@ -814,7 +936,7 @@ namespace tsl {
                 end.b = this->blendColor(src.b, dst.b, dst.a);
                 end.a = std::min(dst.a + src.a, 0xF);
 
-                this->setPixel(x, y, end);
+                this->setPixelWithOffset(offset, end);
             }
 
             /**
@@ -1067,17 +1189,6 @@ namespace tsl {
                 s32 currX = x;
                 s32 currY = y;
 
-                struct Glyph {
-                    stbtt_fontinfo *currFont;
-                    float currFontSize;
-                    int bounds[4];
-                    int xAdvance;
-                    u8 *glyphBmp;
-                    int width, height;
-                };
-
-                static std::unordered_map<u64, Glyph> s_glyphCache;
-
                 do {
                     if (maxWidth > 0 && maxWidth < (currX - x))
                         break;
@@ -1105,41 +1216,36 @@ namespace tsl {
 
                     u64 key = (static_cast<u64>(currCharacter) << 32) | static_cast<u64>(monospace) << 31 | static_cast<u64>(std::bit_cast<u32>(fontSize));
 
-                    Glyph *glyph = nullptr;
+                    detail::CachedGlyph *glyph = nullptr;
 
-                    auto it = s_glyphCache.find(key);
-                    if (it == s_glyphCache.end()) {
-                        /* Cache glyph */
-                        glyph = &s_glyphCache.emplace(key, Glyph()).first->second;
+                    auto it = detail::glyphCache.find(key);
+                    if (it == detail::glyphCache.end()) {
+                        /* Cache glyph: font, metrics and bitmap are computed once per codepoint and size */
+                        glyph = &detail::glyphCache.emplace(key, detail::CachedGlyph()).first->second;
 
-                        if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                            glyph->currFont = &this->m_extFont;
-                        else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                            glyph->currFont = &this->m_localFont;
-                        else
-                            glyph->currFont = &this->m_stdFont;
+                        glyph->font = this->selectFont(currCharacter);
 
-                        glyph->currFontSize = stbtt_ScaleForPixelHeight(glyph->currFont, fontSize);
+                        glyph->fontSize = stbtt_ScaleForPixelHeight(glyph->font, fontSize);
 
-                        stbtt_GetCodepointBitmapBoxSubpixel(glyph->currFont, currCharacter, glyph->currFontSize, glyph->currFontSize,
+                        stbtt_GetCodepointBitmapBoxSubpixel(glyph->font, currCharacter, glyph->fontSize, glyph->fontSize,
                                                             0, 0, &glyph->bounds[0], &glyph->bounds[1], &glyph->bounds[2], &glyph->bounds[3]);
 
                         int yAdvance = 0;
-                        stbtt_GetCodepointHMetrics(glyph->currFont, monospace ? 'W' : currCharacter, &glyph->xAdvance, &yAdvance);
+                        stbtt_GetCodepointHMetrics(glyph->font, monospace ? 'W' : currCharacter, &glyph->xAdvance, &yAdvance);
 
-                        glyph->glyphBmp = stbtt_GetCodepointBitmap(glyph->currFont, glyph->currFontSize, glyph->currFontSize, currCharacter, &glyph->width, &glyph->height, nullptr, nullptr);
+                        glyph->bitmap = stbtt_GetCodepointBitmap(glyph->font, glyph->fontSize, glyph->fontSize, currCharacter, &glyph->width, &glyph->height, nullptr, nullptr);
                     } else {
                         /* Use cached glyph */
                         glyph = &it->second;
                     }
 
-                    if (glyph->glyphBmp != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0) {
+                    if (glyph->bitmap != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0) {
 
                         auto x = currX + glyph->bounds[0];
                         auto y = currY + glyph->bounds[1];
                         for (s32 bmpY = 0; bmpY < glyph->height; bmpY++) {
                             for (s32 bmpX = 0; bmpX < glyph->width; bmpX++) {
-                                auto bmpColor = glyph->glyphBmp[glyph->width * bmpY + bmpX] >> 4;
+                                auto bmpColor = glyph->bitmap[glyph->width * bmpY + bmpX] >> 4;
                                 if (bmpColor == 0xF) {
                                     this->setPixel(x + bmpX, y + bmpY, color);
                                 } else if (bmpColor != 0x0) {
@@ -1152,7 +1258,7 @@ namespace tsl {
 
                     }
 
-                    currX += static_cast<s32>(glyph->xAdvance * glyph->currFontSize);
+                    currX += static_cast<s32>(glyph->xAdvance * glyph->fontSize);
 
                 } while (*string != '\0');
 
@@ -1189,14 +1295,7 @@ namespace tsl {
 
                     strPos += codepointWidth;
 
-                    stbtt_fontinfo *currFont = nullptr;
-
-                    if (stbtt_FindGlyphIndex(&this->m_extFont, currCharacter))
-                        currFont = &this->m_extFont;
-                    else if(this->m_hasLocalFont && stbtt_FindGlyphIndex(&this->m_stdFont, currCharacter)==0)
-                        currFont = &this->m_localFont;
-                    else
-                        currFont = &this->m_stdFont;
+                    stbtt_fontinfo *currFont = this->selectFont(currCharacter);
 
                     float currFontSize = stbtt_ScaleForPixelHeight(currFont, fontSize);
 
@@ -1207,7 +1306,10 @@ namespace tsl {
 
                 } while (string[strPos] != '\0' && string[strPos] != '\n' && currX < maxLength);
 
-                string = string.substr(0, strPos - codepointWidth) + "…";
+                // Only the character that no longer fits is dropped; a line break (or the end of the
+                // string) ends the visible part without cutting the character before it
+                const ssize_t cut = string[strPos] == '\n' ? strPos : strPos - codepointWidth;
+                string = string.substr(0, cut) + "…";
                 string.shrink_to_fit();
 
                 return string;
@@ -1220,6 +1322,18 @@ namespace tsl {
              */
             std::string getMainFrameButtonText() {
                 return this->m_MainFrameButtonText;
+            }
+
+            /**
+             * @brief Overrides the main frame button display string
+             *
+             * The frames draw this hint in their footer. It defaults to the translation of the
+             * system language, this lets an overlay plug in its own translations instead.
+             *
+             * @param text Button display text
+             */
+            void setMainFrameButtonText(const std::string &text) {
+                this->m_MainFrameButtonText = text;
             }
         private:
             Renderer() {}
@@ -1258,11 +1372,113 @@ namespace tsl {
             NWindow m_window;
             Framebuffer m_framebuffer;
             void *m_currentFramebuffer = nullptr;
+            // Number of 16x16 tiles per framebuffer row region, precomputed in init() instead of
+            // being derived from the framebuffer width for every single pixel
+            u32 m_tileStride = 0;
 
             std::stack<ScissoringConfig> m_scissoringStack;
 
-            stbtt_fontinfo m_stdFont, m_localFont, m_extFont;
-            bool m_hasLocalFont = false;
+            // A shared font of the console; only loaded fonts are looked up by selectFont()
+            struct SharedFont {
+                stbtt_fontinfo info{};
+                bool tried = false;
+                bool loaded = false;
+            };
+
+            SharedFont m_stdFont, m_extFont;
+            SharedFont m_chnFont, m_extchnFont, m_twFont, m_korFont;
+
+            // Script fonts that ended up loaded, in lookup order: the ones of the system language
+            // first, then those mapped on demand for texts in another language
+            static constexpr size_t MaxScriptFonts = 4;
+            stbtt_fontinfo *m_scriptFonts[MaxScriptFonts] = {};
+            size_t m_scriptFontCount = 0;
+
+            /**
+             * @brief Whether the regional fonts draw a codepoint differently
+             *
+             * Han ideographs, kana, Hangul and their punctuation have region specific glyph shapes
+             * in the Chinese and Korean shared fonts, so there the font of the system language has
+             * to win over the standard font. Latin, icons and symbols never do.
+             *
+             * @param codepoint UTF-8 codepoint
+             */
+            [[nodiscard]] static constexpr bool isRegionalCodepoint(u32 codepoint) noexcept {
+                return (codepoint >= 0x1100 && codepoint <= 0x11FF)     // Hangul Jamo
+                    || (codepoint >= 0x2E80 && codepoint <= 0x33FF)     // radicals, kana, CJK punctuation
+                    || (codepoint >= 0x3400 && codepoint <= 0x9FFF)     // CJK extension A and unified
+                    || (codepoint >= 0xAC00 && codepoint <= 0xD7AF)     // Hangul syllables
+                    || (codepoint >= 0xF900 && codepoint <= 0xFAFF)     // CJK compatibility
+                    || (codepoint >= 0xFF00 && codepoint <= 0xFFEF)     // halfwidth and fullwidth forms
+                    || (codepoint >= 0x20000 && codepoint <= 0x3FFFF);  // CJK extension B and above
+            }
+
+            /**
+             * @brief Picks the font carrying a codepoint
+             *
+             * The extended font holds the icons and wins over everything. Regional scripts come
+             * from the fonts of the system language first, then the standard font, then those fonts
+             * again for scripts the standard font does not cover. Regions the system language does
+             * not use are mapped on demand, so texts in another language still render.
+             *
+             * @param codepoint UTF-8 codepoint
+             * @return Font containing the codepoint, the standard font if none does
+             */
+            stbtt_fontinfo *selectFont(u32 codepoint) {
+                if (stbtt_FindGlyphIndex(&this->m_extFont.info, codepoint))
+                    return &this->m_extFont.info;
+
+                if (isRegionalCodepoint(codepoint))
+                    for (size_t i = 0; i < this->m_scriptFontCount; i++)
+                        if (stbtt_FindGlyphIndex(this->m_scriptFonts[i], codepoint))
+                            return this->m_scriptFonts[i];
+
+                if (stbtt_FindGlyphIndex(&this->m_stdFont.info, codepoint))
+                    return &this->m_stdFont.info;
+
+                for (size_t i = 0; i < this->m_scriptFontCount; i++)
+                    if (stbtt_FindGlyphIndex(this->m_scriptFonts[i], codepoint))
+                        return this->m_scriptFonts[i];
+
+                if (isRegionalCodepoint(codepoint)) {
+                    // Nothing has the glyph so far: the text is written in a script the system
+                    // language does not use, so map the remaining script fonts once and retry
+                    SharedFont *const fonts[MaxScriptFonts] = { &this->m_chnFont, &this->m_extchnFont, &this->m_twFont, &this->m_korFont };
+                    constexpr PlSharedFontType types[MaxScriptFonts] = { PlSharedFontType_ChineseSimplified, PlSharedFontType_ExtChineseSimplified,
+                        PlSharedFontType_ChineseTraditional, PlSharedFontType_KO };
+
+                    for (size_t i = 0; i < MaxScriptFonts; i++) {
+                        if (!fonts[i]->tried)
+                            this->loadScriptFont(*fonts[i], types[i]);
+                        if (fonts[i]->loaded && stbtt_FindGlyphIndex(&fonts[i]->info, codepoint))
+                            return &fonts[i]->info;
+                    }
+                }
+
+                return &this->m_stdFont.info;
+            }
+
+            /**
+             * @brief Loads a shared font and appends it to the selectFont fallbacks
+             *
+             * A missing font is not fatal: the standard font stays in place and draws what it can.
+             * The attempt is remembered so that selectFont() never retries it.
+             *
+             * @param font Font to fill in
+             * @param type Shared font to load
+             */
+            void loadScriptFont(SharedFont &font, PlSharedFontType type) {
+                font.tried = true;
+
+                PlFontData fontData;
+                if (R_FAILED(plGetSharedFontByType(&fontData, type)))
+                    return;
+
+                u8 *fontBuffer = reinterpret_cast<u8*>(fontData.address);
+                font.loaded = stbtt_InitFont(&font.info, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0)) != 0;
+                if (font.loaded && this->m_scriptFontCount < MaxScriptFonts)
+                    this->m_scriptFonts[this->m_scriptFontCount++] = &font.info;
+            }
 
             static inline float s_opacity = 1.0F;
 
@@ -1335,7 +1551,7 @@ namespace tsl {
              * @param y Y Pos
              * @return Offset
              */
-            inline u32 getPixelOffset(s32 x, s32 y) {
+            [[gnu::pure, gnu::always_inline]] u32 getPixelOffset(s32 x, s32 y) {
                 if (!this->m_scissoringStack.empty()) {
                     // Optimization 1: The clipping check uses unsigned difference comparison (reducing 4 comparisons to 2).
                     const auto& curr = this->m_scissoringStack.top();
@@ -1353,7 +1569,7 @@ namespace tsl {
                 // Constant precomputation (optimized by the compiler)
                 constexpr u32 y_mask = 0x7F;  // 127
                 // High-order bit calculation (equivalent to the original tmpPos*512)
-                u32 highPart = ((y & y_mask) >> 4) + ((x >> 2) & 0xFFFFFFF8) + ((y >> 7) * ((cfg::FramebufferWidth / 2) / 16 * 8)); // ((y / 16 / 8)
+                u32 highPart = ((y & y_mask) >> 4) + ((x >> 2) & 0xFFFFFFF8) + ((y >> 7) * this->m_tileStride); // ((y / 16 / 8)
 
                 //tmpPos *= 16 * 16 * 4;
                 highPart <<= 9;  // tmpPos *= 16 * 16 * 4;
@@ -1418,7 +1634,9 @@ namespace tsl {
                     ASSERT_FATAL(viSetLayerPosition(&this->m_layer, cfg::LayerPosX, cfg::LayerPosY));
                     ASSERT_FATAL(nwindowCreateFromLayer(&this->m_window, &this->m_layer));
                     ASSERT_FATAL(framebufferCreate(&this->m_framebuffer, &this->m_window, cfg::FramebufferWidth, cfg::FramebufferHeight, PIXEL_FORMAT_RGBA_4444, 2));
+                    this->m_tileStride = (cfg::FramebufferWidth / 2) / 16 * 8;
                     ASSERT_FATAL(this->initFonts());
+                    this->updateMainFrameButtonText();
                 });
 
                 this->m_initialized = true;
@@ -1438,31 +1656,72 @@ namespace tsl {
                 viCloseDisplay(&this->m_display);
                 eventClose(&this->m_vsyncEvent);
                 viExit();
+
+                // Glyph bitmaps are owned by the cache; release them together with the renderer
+                for (const auto &[key, glyph] : detail::glyphCache)
+                    std::free(glyph.bitmap);
+                detail::glyphCache.clear();
             }
 
             /**
-             * @brief Initializes Nintendo's shared fonts. Default and Extended
+             * @brief Initializes Nintendo's shared fonts: standard and extended for every language,
+             *        plus the script fonts of the system language
              *
              * @return Result
              */
             Result initFonts() {
-                static PlFontData stdFontData, localFontData, extFontData;
+                this->m_scriptFontCount = 0;
 
                 // Nintendo's default font
-                TSL_R_TRY(plGetSharedFontByType(&stdFontData, PlSharedFontType_Standard));
-
-                u8 *fontBuffer = reinterpret_cast<u8*>(stdFontData.address);
-                stbtt_InitFont(&this->m_stdFont, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0));
+                PlFontData fontData;
+                TSL_R_TRY(plGetSharedFontByType(&fontData, PlSharedFontType_Standard));
+                u8 *fontBuffer = reinterpret_cast<u8*>(fontData.address);
+                if (!stbtt_InitFont(&this->m_stdFont.info, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0)))
+                    return MAKERESULT(Module_Libnx, LibnxError_NotFound);
 
                 // Nintendo's extended font containing a bunch of icons
-                TSL_R_TRY(plGetSharedFontByType(&extFontData, PlSharedFontType_NintendoExt));
+                TSL_R_TRY(plGetSharedFontByType(&fontData, PlSharedFontType_NintendoExt));
+                fontBuffer = reinterpret_cast<u8*>(fontData.address);
+                if (!stbtt_InitFont(&this->m_extFont.info, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0)))
+                    return MAKERESULT(Module_Libnx, LibnxError_NotFound);
 
-                fontBuffer = reinterpret_cast<u8*>(extFontData.address);
-                stbtt_InitFont(&this->m_extFont, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0));
+                // On top of those two, the script fonts of the system language; the standard font
+                // already covers Japanese, so nothing extra is needed there
+                struct ScriptFont { SharedFont *font; PlSharedFontType type; };
+                ScriptFont scriptFonts[MaxScriptFonts];
+                size_t scriptFontCount = 0;
 
+                switch (tr::GetBaseLanguage()) {
+                case tr::SystemLanguage::zh_Hans:
+                    scriptFonts[scriptFontCount++] = { &this->m_chnFont, PlSharedFontType_ChineseSimplified };
+                    scriptFonts[scriptFontCount++] = { &this->m_extchnFont, PlSharedFontType_ExtChineseSimplified };
+                    break;
+                case tr::SystemLanguage::zh_Hant:
+                    scriptFonts[scriptFontCount++] = { &this->m_twFont, PlSharedFontType_ChineseTraditional };
+                    scriptFonts[scriptFontCount++] = { &this->m_extchnFont, PlSharedFontType_ExtChineseSimplified };
+                    break;
+                case tr::SystemLanguage::ko:
+                    scriptFonts[scriptFontCount++] = { &this->m_korFont, PlSharedFontType_KO };
+                    break;
+                default:
+                    break;
+                }
+
+                for (size_t i = 0; i < scriptFontCount; i++)
+                    this->loadScriptFont(*scriptFonts[i].font, scriptFonts[i].type);
+
+                return 0;
+            }
+
+            /**
+             * @brief Sets the footer hint of the frames in the language of the console
+             *
+             * The frames of this library draw this hint themselves, so it is translated here
+             * instead of coming from the translation files of the overlay
+             */
+            void updateMainFrameButtonText() {
                 if(R_SUCCEEDED(setInitialize())) {
                     u64 languageCode;
-                    this->m_hasLocalFont = false;
                     if (R_SUCCEEDED(setGetSystemLanguage(&languageCode))) {
                         SetLanguage setLanguage{SetLanguage_ENUS};
                         if (R_SUCCEEDED(setMakeLanguage(languageCode, &setLanguage))) {
@@ -1490,14 +1749,12 @@ namespace tsl {
                                 break;
                             case SetLanguage_ZHCN:
                             case SetLanguage_ZHHANS:
-                                if(R_SUCCEEDED(plGetSharedFontByType(&localFontData, PlSharedFontType_ChineseSimplified))) {
-                                    this->m_hasLocalFont = true;
+                                if (this->m_chnFont.loaded) {
                                     this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  确认";
                                 }
                                 break;
                             case SetLanguage_KO:
-                                if(R_SUCCEEDED(plGetSharedFontByType(&localFontData, PlSharedFontType_KO))) {
-                                    this->m_hasLocalFont = true;
+                                if (this->m_korFont.loaded) {
                                     this->m_MainFrameButtonText = "\uE0E1  뒤로     \uE0E0  확인";
                                 }
                                 break;
@@ -1513,25 +1770,17 @@ namespace tsl {
                                 break;
                             case SetLanguage_ZHTW:
                             case SetLanguage_ZHHANT:
-                                if(R_SUCCEEDED(plGetSharedFontByType(&localFontData, PlSharedFontType_ChineseTraditional))) {
-                                    this->m_hasLocalFont = true;
+                                if (this->m_twFont.loaded) {
                                     this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  確認";
                                 }
                                 break;
                             default:
-                                this->m_hasLocalFont = false;
                                 break;
-                            }
-                            if (this->m_hasLocalFont) {
-                                fontBuffer = reinterpret_cast<u8*>(localFontData.address);
-                                stbtt_InitFont(&this->m_localFont, fontBuffer, stbtt_GetFontOffsetForIndex(fontBuffer, 0));
                             }
                         }
                     }
                     setExit();
                 }
-
-                return 0;
             }
 
             /**
