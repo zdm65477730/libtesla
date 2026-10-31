@@ -30,6 +30,7 @@
 #include <filesystem>
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <cwctype>
 #include <string>
@@ -856,12 +857,14 @@ namespace tsl {
              * @param color Color
              */
             [[gnu::always_inline]] inline void setPixel(s32 x, s32 y, Color color) {
-                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
+                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight) [[unlikely]]
                     return;
 
+                // getPixelOffset() reports a scissored out pixel with UINT32_MAX, which must not be
+                // stored: it would land outside of the framebuffer
                 const u32 offset = this->getPixelOffset(x, y);
 
-                if (offset != UINT32_MAX)
+                if (offset != UINT32_MAX) [[unlikely]]
                     this->setPixelWithOffset(offset, color);
             }
 
@@ -874,9 +877,10 @@ namespace tsl {
              * @return Blended color
              */
             [[gnu::always_inline]] inline u8 blendColor(u8 src, u8 dst, u8 alpha) {
-                u8 oneMinusAlpha = 0x0F - alpha;
-
-                return (dst * alpha + src * oneMinusAlpha) / float(0xF);
+                // Integer math with a constant divisor: the compiler turns / 15u into a multiply
+                // and a shift, so the per pixel path keeps no float conversion at all while the
+                // result stays bit identical to the old float division
+                return (dst * alpha + src * (15u - alpha)) / 15u;
             }
 
             /**
@@ -887,14 +891,14 @@ namespace tsl {
              * @param color Color
              */
             [[gnu::always_inline]] inline void setPixelBlendSrc(s32 x, s32 y, Color color) {
-                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
+                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight) [[unlikely]]
                     return;
 
                 // The offset is translated and clipped once and then reused for the read and the
                 // write instead of being computed twice
                 const u32 offset = this->getPixelOffset(x, y);
 
-                if (offset == UINT32_MAX)
+                if (offset == UINT32_MAX) [[unlikely]]
                     return;
 
                 Color src((static_cast<u16*>(this->getCurrentFramebuffer()))[offset]);
@@ -917,14 +921,14 @@ namespace tsl {
              * @param color Color
              */
             [[gnu::always_inline]] inline void setPixelBlendDst(s32 x, s32 y, Color color) {
-                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
+                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight) [[unlikely]]
                     return;
 
                 // The offset is translated and clipped once and then reused for the read and the
                 // write instead of being computed twice
                 const u32 offset = this->getPixelOffset(x, y);
 
-                if (offset == UINT32_MAX)
+                if (offset == UINT32_MAX) [[unlikely]]
                     return;
 
                 Color src((static_cast<u16*>(this->getCurrentFramebuffer()))[offset]);
@@ -964,7 +968,7 @@ namespace tsl {
              * @param color Color
              */
             inline void drawEmptyRect(s32 x, s32 y, s32 w, s32 h, Color color) {
-                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight)
+                if (x < 0 || y < 0 || x >= cfg::FramebufferWidth || y >= cfg::FramebufferHeight) [[unlikely]]
                     return;
 
                 for (s32 x1 = x; x1 <= (x + w); x1++)
@@ -1185,6 +1189,9 @@ namespace tsl {
              * @return Dimensions of drawn string
              */
             std::pair<u32, u32> drawString(const char* string, bool monospace, s32 x, s32 y, float fontSize, Color color, ssize_t maxWidth = 0) {
+                if (string == nullptr || *string == '\0')
+                    return { 0, 0 };
+
                 s32 maxX = x;
                 s32 currX = x;
                 s32 currY = y;
@@ -1214,49 +1221,11 @@ namespace tsl {
                         continue;
                     }
 
-                    u64 key = (static_cast<u64>(currCharacter) << 32) | static_cast<u64>(monospace) << 31 | static_cast<u64>(std::bit_cast<u32>(fontSize));
+                    const detail::CachedGlyph *glyph = this->cachedGlyph(currCharacter, monospace, fontSize);
 
-                    detail::CachedGlyph *glyph = nullptr;
-
-                    auto it = detail::glyphCache.find(key);
-                    if (it == detail::glyphCache.end()) {
-                        /* Cache glyph: font, metrics and bitmap are computed once per codepoint and size */
-                        glyph = &detail::glyphCache.emplace(key, detail::CachedGlyph()).first->second;
-
-                        glyph->font = this->selectFont(currCharacter);
-
-                        glyph->fontSize = stbtt_ScaleForPixelHeight(glyph->font, fontSize);
-
-                        stbtt_GetCodepointBitmapBoxSubpixel(glyph->font, currCharacter, glyph->fontSize, glyph->fontSize,
-                                                            0, 0, &glyph->bounds[0], &glyph->bounds[1], &glyph->bounds[2], &glyph->bounds[3]);
-
-                        int yAdvance = 0;
-                        stbtt_GetCodepointHMetrics(glyph->font, monospace ? 'W' : currCharacter, &glyph->xAdvance, &yAdvance);
-
-                        glyph->bitmap = stbtt_GetCodepointBitmap(glyph->font, glyph->fontSize, glyph->fontSize, currCharacter, &glyph->width, &glyph->height, nullptr, nullptr);
-                    } else {
-                        /* Use cached glyph */
-                        glyph = &it->second;
-                    }
-
-                    if (glyph->bitmap != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0) {
-
-                        auto x = currX + glyph->bounds[0];
-                        auto y = currY + glyph->bounds[1];
-                        for (s32 bmpY = 0; bmpY < glyph->height; bmpY++) {
-                            for (s32 bmpX = 0; bmpX < glyph->width; bmpX++) {
-                                auto bmpColor = glyph->bitmap[glyph->width * bmpY + bmpX] >> 4;
-                                if (bmpColor == 0xF) {
-                                    this->setPixel(x + bmpX, y + bmpY, color);
-                                } else if (bmpColor != 0x0) {
-                                    Color tmpColor = color;
-                                    tmpColor.a = bmpColor * (float(tmpColor.a) / 0xF);
-                                    this->setPixelBlendDst(x + bmpX, y + bmpY, tmpColor);
-                                }
-                            }
-                        }
-
-                    }
+                    if (glyph->bitmap != nullptr && !std::iswspace(currCharacter) && fontSize > 0 && color.a != 0x0)
+                        this->blitGlyph(glyph->bitmap, glyph->width, glyph->height,
+                                        currX + glyph->bounds[0], currY + glyph->bounds[1], color);
 
                     currX += static_cast<s32>(glyph->xAdvance * glyph->fontSize);
 
@@ -1487,7 +1456,7 @@ namespace tsl {
              *
              * @return Framebuffer address
              */
-            inline void* getCurrentFramebuffer() {
+            [[gnu::always_inline]] inline void* getCurrentFramebuffer() {
                 return this->m_currentFramebuffer;
             }
 
@@ -1551,8 +1520,10 @@ namespace tsl {
              * @param y Y Pos
              * @return Offset
              */
+            #pragma GCC push_options
+            #pragma GCC optimize ("O3")
             [[gnu::pure, gnu::always_inline]] u32 getPixelOffset(s32 x, s32 y) {
-                if (!this->m_scissoringStack.empty()) {
+                if (!this->m_scissoringStack.empty()) [[unlikely]] {
                     // Optimization 1: The clipping check uses unsigned difference comparison (reducing 4 comparisons to 2).
                     const auto& curr = this->m_scissoringStack.top();
                     u32 dx = static_cast<u32>(x - curr.x);
@@ -1585,6 +1556,8 @@ namespace tsl {
                 //return tmpPos / 2;
                 return highPart | lowPart;
             }
+
+            #pragma GCC pop_options
 
             /**
              * @brief Initializes the renderer and layers
@@ -1634,7 +1607,9 @@ namespace tsl {
                     ASSERT_FATAL(viSetLayerPosition(&this->m_layer, cfg::LayerPosX, cfg::LayerPosY));
                     ASSERT_FATAL(nwindowCreateFromLayer(&this->m_window, &this->m_layer));
                     ASSERT_FATAL(framebufferCreate(&this->m_framebuffer, &this->m_window, cfg::FramebufferWidth, cfg::FramebufferHeight, PIXEL_FORMAT_RGBA_4444, 2));
-                    this->m_tileStride = (cfg::FramebufferWidth / 2) / 16 * 8;
+                    // Tiles per 128 row block, taken from the aligned width the framebuffer really
+                    // uses: cfg::FramebufferWidth is not necessarily a multiple of 32
+                    this->m_tileStride = this->m_framebuffer.width_aligned >> 2;
                     ASSERT_FATAL(this->initFonts());
                     this->updateMainFrameButtonText();
                 });
@@ -1720,66 +1695,50 @@ namespace tsl {
              * instead of coming from the translation files of the overlay
              */
             void updateMainFrameButtonText() {
-                if(R_SUCCEEDED(setInitialize())) {
-                    u64 languageCode;
-                    if (R_SUCCEEDED(setGetSystemLanguage(&languageCode))) {
-                        SetLanguage setLanguage{SetLanguage_ENUS};
-                        if (R_SUCCEEDED(setMakeLanguage(languageCode, &setLanguage))) {
-                            switch (setLanguage) {
-                            case SetLanguage_JA:
-                                    this->m_MainFrameButtonText = "\uE0E1  戻る     \uE0E0  確認";
-                                break;
-                            case SetLanguage_ENUS:
-                            case SetLanguage_ENGB:
-                                    this->m_MainFrameButtonText = "\uE0E1  Back     \uE0E0  OK";
-                                break;
-                            case SetLanguage_FR:
-                            case SetLanguage_FRCA:
-                                    this->m_MainFrameButtonText = "\uE0E1  Retour     \uE0E0  Confirmation";
-                                break;
-                            case SetLanguage_DE:
-                                    this->m_MainFrameButtonText = "\uE0E1  Zurück     \uE0E0  Bestätigen";
-                                break;
-                            case SetLanguage_IT:
-                                    this->m_MainFrameButtonText = "\uE0E1  Ritorno     \uE0E0  Conferma";
-                                break;
-                            case SetLanguage_ES:
-                            case SetLanguage_ES419:
-                                    this->m_MainFrameButtonText = "\uE0E1  Return     \uE0E0  Confirmar";
-                                break;
-                            case SetLanguage_ZHCN:
-                            case SetLanguage_ZHHANS:
-                                if (this->m_chnFont.loaded) {
-                                    this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  确认";
-                                }
-                                break;
-                            case SetLanguage_KO:
-                                if (this->m_korFont.loaded) {
-                                    this->m_MainFrameButtonText = "\uE0E1  뒤로     \uE0E0  확인";
-                                }
-                                break;
-                            case SetLanguage_NL:
-                                    this->m_MainFrameButtonText = "\uE0E1  Terugkeer     \uE0E0  Bevestigen";
-                                break;
-                            case SetLanguage_PT:
-                            case SetLanguage_PTBR:
-                                    this->m_MainFrameButtonText = "\uE0E1  Retorno     \uE0E0  Confirmar";
-                                break;
-                            case SetLanguage_RU:
-                                    this->m_MainFrameButtonText = "\uE0E1  возвращение      \uE0E0  подтверждение ";
-                                break;
-                            case SetLanguage_ZHTW:
-                            case SetLanguage_ZHHANT:
-                                if (this->m_twFont.loaded) {
-                                    this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  確認";
-                                }
-                                break;
-                            default:
-                                break;
-                            }
-                        }
-                    }
-                    setExit();
+                // tr::GetBaseLanguage() caches the language of the console, so the hint comes from
+                // it directly instead of opening the set service once more
+                switch (tr::GetBaseLanguage()) {
+                case tr::SystemLanguage::ja:
+                    this->m_MainFrameButtonText = "\uE0E1  戻る     \uE0E0  確認";
+                    break;
+                case tr::SystemLanguage::en:
+                    this->m_MainFrameButtonText = "\uE0E1  Back     \uE0E0  OK";
+                    break;
+                case tr::SystemLanguage::fr:
+                    this->m_MainFrameButtonText = "\uE0E1  Retour     \uE0E0  Confirmation";
+                    break;
+                case tr::SystemLanguage::de:
+                    this->m_MainFrameButtonText = "\uE0E1  Zurück     \uE0E0  Bestätigen";
+                    break;
+                case tr::SystemLanguage::it:
+                    this->m_MainFrameButtonText = "\uE0E1  Ritorno     \uE0E0  Conferma";
+                    break;
+                case tr::SystemLanguage::es:
+                    this->m_MainFrameButtonText = "\uE0E1  Return     \uE0E0  Confirmar";
+                    break;
+                case tr::SystemLanguage::zh_Hans:
+                    if (this->m_chnFont.loaded)
+                        this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  确认";
+                    break;
+                case tr::SystemLanguage::ko:
+                    if (this->m_korFont.loaded)
+                        this->m_MainFrameButtonText = "\uE0E1  뒤로     \uE0E0  확인";
+                    break;
+                case tr::SystemLanguage::nl:
+                    this->m_MainFrameButtonText = "\uE0E1  Terugkeer     \uE0E0  Bevestigen";
+                    break;
+                case tr::SystemLanguage::pt:
+                    this->m_MainFrameButtonText = "\uE0E1  Retorno     \uE0E0  Confirmar";
+                    break;
+                case tr::SystemLanguage::ru:
+                    this->m_MainFrameButtonText = "\uE0E1  возвращение      \uE0E0  подтверждение ";
+                    break;
+                case tr::SystemLanguage::zh_Hant:
+                    if (this->m_twFont.loaded)
+                        this->m_MainFrameButtonText = "\uE0E1  返回     \uE0E0  確認";
+                    break;
+                default:
+                    break;
                 }
             }
 
@@ -1820,14 +1779,75 @@ namespace tsl {
                 if (glyphBmp == nullptr)
                     return;
 
-                for (s16 bmpY = 0; bmpY < height; bmpY++) {
-                    for (s16 bmpX = 0; bmpX < width; bmpX++) {
-                        Color tmpColor = color;
-                        tmpColor.a = (glyphBmp[width * bmpY + bmpX] >> 4) * (float(tmpColor.a) / 0xF);
-                        this->setPixelBlendSrc(x + bmpX, y + bmpY, tmpColor);
+                this->blitGlyph(glyphBmp, width, height, x, y, color);
+                std::free(glyphBmp);
+            }
+
+            /**
+             * @brief Reads the scaled glyph of a codepoint from the cache, rasterizing it on a miss
+             *
+             * The codepoint, the style and the size build the key: the size goes into the low 32 bits
+             * and the style above it, so the sign bit of the float can not collide with it.
+             *
+             * @param codepoint Unicode codepoint
+             * @param monospace Use the advance of 'W' for every codepoint
+             * @param fontSize Height of the text in pixels
+             * @return Cached glyph
+             */
+            detail::CachedGlyph *cachedGlyph(u32 codepoint, bool monospace, float fontSize) {
+                const u64 key = (static_cast<u64>(codepoint) << 33)
+                              | (static_cast<u64>(monospace) << 32)
+                              | static_cast<u64>(std::bit_cast<u32>(fontSize));
+
+                auto it = detail::glyphCache.find(key);
+                if (it != detail::glyphCache.end())
+                    return &it->second;
+
+                // Metrics and bitmap are rasterized once per codepoint and size, every later draw of
+                // the same glyph only costs the blit
+                detail::CachedGlyph &glyph = detail::glyphCache.try_emplace(key).first->second;
+
+                glyph.font = this->selectFont(codepoint);
+
+                glyph.fontSize = stbtt_ScaleForPixelHeight(glyph.font, fontSize);
+
+                stbtt_GetCodepointBitmapBoxSubpixel(glyph.font, codepoint, glyph.fontSize, glyph.fontSize,
+                                                    0, 0, &glyph.bounds[0], &glyph.bounds[1], &glyph.bounds[2], &glyph.bounds[3]);
+
+                int yAdvance = 0;
+                stbtt_GetCodepointHMetrics(glyph.font, monospace ? 'W' : codepoint, &glyph.xAdvance, &yAdvance);
+
+                glyph.bitmap = stbtt_GetCodepointBitmap(glyph.font, glyph.fontSize, glyph.fontSize, codepoint, &glyph.width, &glyph.height, nullptr, nullptr);
+
+                return &glyph;
+            }
+
+            /**
+             * @brief Blends the 8 bit coverage bitmap of a glyph onto the screen
+             *
+             * @param bitmap Coverage bitmap
+             * @param width Bitmap width
+             * @param height Bitmap height
+             * @param x X pos
+             * @param y Y pos
+             * @param color Text color
+             */
+            inline void blitGlyph(const u8 *bitmap, int width, int height, s32 x, s32 y, Color color) {
+                for (s32 bmpY = 0; bmpY < height; bmpY++) {
+                    for (s32 bmpX = 0; bmpX < width; bmpX++) {
+                        const u8 coverage = bitmap[width * bmpY + bmpX] >> 4;
+
+                        // Fully covered pixels keep the text color, the rest is blended with the scaled
+                        // alpha. The division has a constant divisor, so no float conversion is needed
+                        if (coverage == 0xF) {
+                            this->setPixel(x + bmpX, y + bmpY, color);
+                        } else if (coverage != 0x0) {
+                            Color tmpColor = color;
+                            tmpColor.a = coverage * tmpColor.a / 0xF;
+                            this->setPixelBlendDst(x + bmpX, y + bmpY, tmpColor);
+                        }
                     }
                 }
-                std::free(glyphBmp);
             }
         };
 
